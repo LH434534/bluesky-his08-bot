@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """ai_engine.py — camada de IA para o bot Bluesky (stdlib only).
 Providers suportados (via env):
-  OLLAMA_FREE=1       -> OllamaFreeAPI (GitHub mfoud444/ollamafreeapi): GRÁTIS, sem key, llama/qwen/deepseek/mistral
+  G4F=1               -> xtekky/gpt4free (GitHub): GRÁTIS, sem key, model=auto multi-provedores
+  OLLAMA_FREE=1       -> OllamaFreeAPI (GitHub mfoud444/ollamafreeapi): GRÁTIS, sem key (instável)
   OPENAI_API_KEY     -> api.openai.com (chat completions, modelo gpt-4o-mini por padrão)
   ANTHROPIC_API_KEY  -> api.anthropic.com (messages, modelo claude-3-haiku por padrão)
   GEMINI_API_KEY     -> generativelanguage.googleapis.com (gemini-1.5-flash por padrão)
@@ -29,6 +30,8 @@ class AIEngine:
 
     # ------------------------------------------------------------ providers
     def _detect_provider(self):
+        if os.environ.get("G4F", "").strip().lower() in ("1", "true", "yes", "sim"):
+            return "g4f"
         if os.environ.get("OLLAMA_FREE", "").strip().lower() in ("1", "true", "yes", "sim"):
             return "ollamafree"
         if os.environ.get("OPENAI_API_KEY"):
@@ -60,6 +63,23 @@ class AIEngine:
 
     # ------------------------------------------------------------ completions
     def _complete(self, system, user, temperature=0.9):
+        if self.provider == "g4f":
+            # GitHub: xtekky/gpt4free — IA gratuita sem key (model=auto escolhe provedor)
+            try:
+                from g4f.client import Client as G4FClient
+            except ImportError as e:
+                raise RuntimeError("g4f não instalado (pip install -U g4f)") from e
+            client = G4FClient()
+            resp = client.chat.completions.create(
+                model="auto",
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                web_search=False,
+            )
+            return resp.choices[0].message.content
+
         if self.provider == "ollamafree":
             # GitHub: mfoud444/ollamafreeapi — API pública gratuita (sem key)
             model = os.environ.get("OLLAMA_FREE_MODEL", "llama3.2:3b")
