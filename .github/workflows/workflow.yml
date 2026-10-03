@@ -18,6 +18,11 @@ on:
       ia_enabled:
         description: "Forçar geração com IA (mesmo sem texto)"
         required: false
+        default: "true"
+        type: boolean
+      ai_test_only:
+        description: "Apenas testar IA (gera conteúdo sem publicar)"
+        required: false
         default: "false"
         type: boolean
 
@@ -28,6 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Instalar dependências
+        run: pip install ollamafreeapi --quiet || echo "sem pacote gratuito, segue fallback"
+
       - name: Rodar bot
         env:
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
@@ -35,6 +43,9 @@ jobs:
           BSKY_FORCE_POST: ${{ github.event.inputs.force_post }}
           BSKY_FORCE_TEXT: ${{ github.event.inputs.force_text }}
           IA_ENABLED: ${{ github.event.inputs.ia_enabled }}
+          BSKY_AI_TEST_ONLY: ${{ github.event.inputs.ai_test_only }}
+          OLLAMA_FREE: "1"
+          OLLAMA_FREE_MODEL: "llama3.2:3b"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
