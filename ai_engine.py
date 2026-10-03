@@ -17,6 +17,8 @@ Uso:
 """
 import json
 import os
+import re
+import unicodedata
 import urllib.request
 import urllib.error
 
@@ -47,9 +49,10 @@ PERSONA_HUMANO = (
     "4) Emoção real de mlk de 18: animação, tédio, empolgação com música/jogo/futebol, reclamação leve da vida, "
     "comentário sobre o dia, zoeira com amigos. "
     "5) NUNCA: pareça motivacional genérico, nunca use markdown, nunca escreva como influencer de marketing, "
-    "nunca termine com 'curtam' ou 'sigam'. ""6) HASHTAGS OBRIGATÓRIAS: em QUALQUER post, SEMPRE feche o texto com 2 a 3 hashtags relevantes ao assunto "
-    "(mín 2, máx 3, minúsculas, sem espaços, ex: #música #futebol #vibe). As hashtags contam como parte normal do post, "
-    "não são opcionais e devem ser as últimas palavras do texto. "
+    "nunca termine com 'curtam' ou 'sigam'. ""6) HASHTAGS OBRIGATÓRIAS (só em posts do seu feed, NUNCA em replies/respostas): em todo post novo, "
+    "SEMPRE feche o texto com 2 a 3 hashtags relevantes ao assunto (mín 2, máx 3, minúsculas, sem espaços, "
+    "ex: #música #futebol #vibe). As hashtags contam como parte normal do post, não são opcionais e devem "
+    "ser as últimas palavras do texto. "
     "7) Máx 2 emojis por texto, e só emojis que mlk de 18 usa de verdade (fire, risada, sparkles, triste, joia, coração). "
     "8) Varia o estilo a cada texto: nunca repita estrutura. Às vezes só uma frase, às vezes um desabafo, às vezes zoeira."
 )
@@ -93,7 +96,7 @@ class AIEngine:
             raw = resp.read().decode("utf-8")
             return json.loads(raw) if raw else {}
 
-    def _clean(self, text, limit=300):
+    def _clean(self, text, limit=295):
         text = (text or "").strip().strip("\"'`")
         # remove emojis duplicados/linhas vazias extras
         lines = [ln for ln in text.splitlines() if ln.strip()]
@@ -105,6 +108,46 @@ class AIEngine:
         if " " in cut:
             cut = cut.rsplit(" ", 1)[0]
         return cut.rstrip() + "..." if cut.rstrip() else joined[:limit]
+
+    # ------------------------------------------------------------ hashtags
+    HASHTAG_POOL = ["#vibe", "#brasil", "#música", "#futebol", "#jogo", "#diaadia", "#role", "#zoeira"]
+
+    def _slug(self, word):
+        word = unicodedata.normalize("NFKD", word)
+        word = "".join(c for c in word if not unicodedata.combining(c))
+        return re.sub(r"[^a-zA-Z0-9]", "", word).lower()
+
+    def _ensure_hashtags(self, text, topic=None, limit=295):
+        """Garante 2-3 hashtags no final. Se a IA não colocou, injeta do pool/topic."""
+        text = (text or "").rstrip()
+        tags = re.findall(r"#[A-Za-zÀ-ÿ0-9_]+", text)
+        has = len(tags)
+        if has >= 2:
+            return text[:limit]
+        extra = []
+        if topic:
+            words = [self._slug(w) for w in topic.split() if len(self._slug(w)) > 3]
+            for w in words:
+                if len(extra) >= 3:
+                    break
+                tag = f"#{w}"
+                if tag not in tags and tag not in extra:
+                    extra.append(tag)
+        for tag in self.HASHTAG_POOL:
+            if len(extra) >= 3:
+                break
+            if tag not in tags and tag not in extra:
+                extra.append(tag)
+        if not extra:
+            return text[:limit]
+        need = max(0, 2 - has)
+        picks = extra[:need]
+        if not picks:
+            return text[:limit]
+        joined_tags = " " + " ".join(picks)
+        max_body = limit - len(joined_tags)
+        body = text if len(text) <= max_body else (text[:max_body].rsplit(" ", 1)[0].rstrip() if " " in text[:max_body] else text[:max_body])
+        return f"{body}{joined_tags}".strip()[:limit]
 
     # ------------------------------------------------------------ completions
     def _complete(self, system, user, temperature=0.9):
@@ -213,13 +256,13 @@ class AIEngine:
     def generate_post(self):
         """Gera um post curto, natural, estilo influenciador criativo."""
         sys = persona_system(
-            "Escreva um post de até 280 caracteres (contando as hashtags), SEMPRE COMPLETO até o fim: "
+            "Escreva um post de até 250 caracteres (já contando as hashtags), SEMPRE COMPLETO até o fim: "
             "não pare no meio, não corte a frase, escreva o texto inteiro. "
             "Pode ser sobre música, jogo, futebol, rolê, faculdade, tédio, crush, zoeira ou o que te passar na cabeça. "
             "SEMPRE feche com 2 a 3 hashtags relevantes (mín 2, máx 3) pra alcançar mais gente."
         )
         user = "O que você vai postar agora? Escreve como você fala mesmo, do jeito que digitaria no celular, e termina com as hashtags."
-        return self._clean(self._complete(sys, user))
+        return self._ensure_hashtags(self._clean(self._complete(sys, user)))
 
     def generate_reply(self, original):
         """Gera resposta curta e contextual para um post específico."""
@@ -244,7 +287,7 @@ class AIEngine:
     def generate_topic_post(self, topic):
         """Gera um post comentando sobre um assunto que está em alta."""
         sys = persona_system(
-            "Comente o assunto em alta com um post de até 280 caracteres (contando as hashtags), do jeito que um mlk de 18 "
+            "Comente o assunto em alta com um post de até 250 caracteres (contando as hashtags), do jeito que um mlk de 18 "
             "comenta uma trend ao vivo: opinião sincera, leve, sem parecer jornalista nem copy. "
             "SEMPRE escreva o post COMPLETO até o fim, sem cortar no meio. "
             "SEMPRE feche com 2 a 3 hashtags relevantes (mín 2, máx 3) pra alcançar mais gente."
@@ -254,7 +297,7 @@ class AIEngine:
             "Escreva 1 post seu comentando sobre isso, como se você estivesse "
             "acompanhando a trend ao vivo. Termina com as hashtags."
         )
-        return self._clean(self._complete(sys, user, temperature=0.85))
+        return self._ensure_hashtags(self._clean(self._complete(sys, user, temperature=0.85)), topic)
 
 
 def main():
