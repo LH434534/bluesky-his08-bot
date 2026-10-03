@@ -51,6 +51,7 @@ jobs:
 
       - name: Rodar bot autônomo (anti-ban extremo)
         env:
+          TZ: "America/Sao_Paulo"
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
           BSKY_FORCE_POST: ${{ github.event.inputs.force_post }}
