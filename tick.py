@@ -62,7 +62,10 @@ def chance(tag, pct):
 
 
 def post_info(item):
-    post = item.get("post", {}) if item else {}
+    if not item:
+        return {"text": "", "uri": "", "cid": "", "handle": "?", "did": ""}
+    # feed items vêm como {"post": {...}}; search items vêm como post direto
+    post = item.get("post") or item
     author = post.get("author", {}) or {}
     return {
         "text": (post.get("record", {}) or {}).get("text", "") or "",
@@ -103,9 +106,10 @@ except RuntimeError as e:
     print("  [erro timeline]", e)
 
 trending_posts = []
+trending_topics = []
 trending_feed = auto.get("trending_feed", "at://did:plc:z72i7hdynmk6r22z27h6tv6ah/app.bsky.feed.generator/whats-hot")
 if auto.get("trending_enabled", True):
-    # 1) fonte nativa: posts populares (What's Hot do Bluesky)
+    # 1) nativo: posts populares (pode estar descontinuado -> 501, seguimos)
     try:
         hot = client.get_popular(limit=20)
         trending_posts = [it for it in hot.get("feed", []) if it.get("post")]
@@ -113,14 +117,30 @@ if auto.get("trending_enabled", True):
             print(f"[contexto] posts em alta lidos: {len(trending_posts)}")
     except RuntimeError as e:
         print("  [erro trending]", e)
-    # 2) fallback: feed custom
+    # 2) nativo: tópicos em alta + posts do tópico principal
     if not trending_posts:
-        for feed_uri in (trending_feed, "at://did:plc:z72i7hdynmk6r22z27h6tv6ah/app.bsky.feed.generator/discover"):
+        try:
+            tt = client.get_trending_topics(limit=10)
+            trending_topics = [t.get("topic", "") for t in tt.get("trending", []) if t.get("topic")]
+            if trending_topics:
+                print(f"[contexto] tópicos em alta: {', '.join(trending_topics[:3])}")
+                try:
+                    hot2 = client.search_posts(trending_topics[0], limit=15)
+                    trending_posts = [it for it in hot2.get("posts", []) if it.get("uri")]
+                    print(f"[contexto] posts do tópico em alta: {len(trending_posts)}")
+                except RuntimeError as e:
+                    print("  [erro trending]", e)
+        except RuntimeError as e:
+            print("  [erro trending]", e)
+    # 3) fallback: busca por palavras-chave culturais
+    if not trending_posts:
+        for kw in ["música", "arte", "futebol", "cinema", "Brasil", "tecnologia"]:
             try:
-                hot = client.get_feed(feed_uri, limit=15)
-                trending_posts = [it for it in hot.get("feed", []) if it.get("post")]
-                if trending_posts:
-                    print(f"[contexto] feed em alta lido: {len(trending_posts)} posts")
+                r = client.search_posts(kw, limit=10)
+                posts = [it for it in r.get("posts", []) if it.get("uri")]
+                if posts:
+                    trending_posts = posts
+                    print(f"[contexto] busca '{kw}': {len(posts)} posts")
                     break
             except RuntimeError as e:
                 print("  [erro trending]", e)
@@ -252,11 +272,15 @@ if ia_ok and random.random() < extra_prob:
 
 # 4d) post sobre o que está em alta
 trend_prob = auto.get("trending_post_prob", 0.35)
-if ia_ok and trending_posts and random.random() < trend_prob:
-    info = post_info(random.choice(trending_posts))
-    if info["text"]:
+if ia_ok and (trending_posts or trending_topics) and random.random() < trend_prob:
+    tema = None
+    if trending_topics:
+        tema = random.choice(trending_topics)
+    elif trending_posts:
+        tema = post_info(random.choice(trending_posts))["text"]
+    if tema:
         try:
-            safe_post(ai.generate_topic_post(info["text"]), "trending")
+            safe_post(ai.generate_topic_post(tema), "trending")
         except Exception as e:
             print("  [erro post-trending]", e)
 
