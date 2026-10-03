@@ -177,6 +177,30 @@ class AIEngine:
         user = f"O post é: \"{original[:200]}\"\nEscreva sua resposta:"
         return self._clean(self._complete(sys, user, temperature=0.8))
 
+    def generate_bio(self):
+        """Gera uma bio nova e autêntica para o perfil."""
+        sys = (
+            "Você é um influenciador brasileiro criativo. Escreva uma bio curta "
+            "(máx 120 caracteres), autêntica, com personalidade e tom brasileiro. "
+            "Sem hashtags, sem markdown, sem emojis demais (máx 2)."
+        )
+        user = "Escreva uma bio nova e original para meu perfil agora."
+        return self._clean(self._complete(sys, user, temperature=0.9))
+
+    def generate_topic_post(self, topic):
+        """Gera um post comentando sobre um assunto que está em alta."""
+        sys = (
+            "Você é um influenciador brasileiro antenado no Bluesky. Comente assuntos "
+            "em alta com posts curtos (máx 200 caracteres), naturais, com opinião leve "
+            "e sem hashtags exageradas. Nunca use markdown."
+        )
+        user = (
+            f"O assunto em alta é: \"{topic[:200]}\"\n"
+            "Escreva 1 post seu comentando sobre isso, como se você estivesse "
+            "acompanhando a trend ao vivo."
+        )
+        return self._clean(self._complete(sys, user, temperature=0.85))
+
 
 def main():
     ai = AIEngine()
