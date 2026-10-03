@@ -22,6 +22,19 @@ import urllib.error
 
 MAX_TRIES = 2
 
+# Política oficial de automação do Bluesky (Developer Guidelines + Community Guidelines 10/2025)
+# Injetada em TODOS os geradores para a IA nunca parecer robô nem violar as regras da plataforma.
+BLUESKY_POLICY = (
+    "REGRAS OFICIAIS DO BLUESKY (obrigatório seguir): "
+    "1) Nada de spam: interações automatizadas em massa (like/reply/follow em rajada) são proibidas; "
+    "aja em volume baixo, humano e espalhado. "
+    "2) Nunca manipular métricas ou seguidores; engajamento deve ser real e contextual. "
+    "3) Seja autêntico: nada de conteúdo repetido, genérico ou que pareça copiado de robô. "
+    "4) Ritmo humano: pausas naturais, textos variados, sem padrão mecânico. "
+    "5) Prefira interagir com quem interage contigo; não saia respondendo todo mundo. "
+    "6) Não tente burlar rate limits nem sistemas da plataforma."
+)
+
 
 class AIEngine:
     def __init__(self, cfg=None):
@@ -180,6 +193,7 @@ class AIEngine:
     def generate_bio(self):
         """Gera uma bio nova e autêntica para o perfil."""
         sys = (
+            BLUESKY_POLICY + " "
             "Você é um influenciador brasileiro criativo. Escreva uma bio curta "
             "(máx 120 caracteres), autêntica, com personalidade e tom brasileiro. "
             "Sem hashtags, sem markdown, sem emojis demais (máx 2)."
