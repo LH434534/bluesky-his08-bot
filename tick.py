@@ -303,8 +303,9 @@ def safe_update_profile(**kw):
         return False
 
 
+force_bio = os.environ.get("BSKY_FORCE_BIO", "").strip().lower() in ("1", "true", "yes", "sim")
 bio_prob = auto.get("bio_daily_prob", 0.0)
-if ia_ok and bio_prob > 0 and chance("bio", bio_prob):
+if ia_ok and (force_bio or (bio_prob > 0 and chance("bio", bio_prob))):
     try:
         bio = ai.generate_bio()
         if bio:
@@ -313,8 +314,9 @@ if ia_ok and bio_prob > 0 and chance("bio", bio_prob):
     except Exception as e:
         print("  [erro bio]", e)
 
+force_avatar = os.environ.get("BSKY_FORCE_AVATAR", "").strip().lower() in ("1", "true", "yes", "sim")
 avatar_prob = auto.get("avatar_daily_prob", 0.0)
-if avatar_prob > 0 and chance("avatar", avatar_prob):
+if force_avatar or (avatar_prob > 0 and chance("avatar", avatar_prob)):
     seed = day_seed("avatar")
     urls = [
         f"https://robohash.org/his08-{seed}.png?size=400x400",
