@@ -30,7 +30,17 @@ except RuntimeError as e:
 now = time.localtime()
 cur_min = now.tm_hour * 60 + now.tm_min
 
-# 1) post agendado (tolerância 5 min)
+force_post = os.environ.get("BSKY_FORCE_POST", "").strip().lower() in ("1", "true", "yes", "sim")
+
+# 1) post agendado (tolerância 5 min) ou post forçado
+if force_post:
+    texto = os.environ.get("BSKY_FORCE_TEXT", "🔥 Primeiro post do bot no ar! Sigam @his08.bsky.social e fiquem ligados.")
+    try:
+        client.create_post(texto)
+        print(f"  [post-forcado] {texto}")
+    except RuntimeError as e:
+        print("  [erro post]", e)
+
 for s in cfg["schedule"]:
     if s.get("action") != "post":
         continue
