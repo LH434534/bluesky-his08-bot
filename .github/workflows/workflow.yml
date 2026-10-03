@@ -11,10 +11,15 @@ on:
         default: "false"
         type: boolean
       force_text:
-        description: "Texto do post forçado"
+        description: "Texto do post forçado (vazio = gerar com IA)"
         required: false
-        default: "🔥 Primeiro post do bot no ar! Sigam @his08.bsky.social e fiquem ligados."
+        default: ""
         type: string
+      ia_enabled:
+        description: "Forçar geração com IA (mesmo sem texto)"
+        required: false
+        default: "false"
+        type: boolean
 
 jobs:
   run:
@@ -29,4 +34,11 @@ jobs:
           BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
           BSKY_FORCE_POST: ${{ github.event.inputs.force_post }}
           BSKY_FORCE_TEXT: ${{ github.event.inputs.force_text }}
+          IA_ENABLED: ${{ github.event.inputs.ia_enabled }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_API_URL: ${{ secrets.AI_API_URL }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
         run: python3 tick.py
