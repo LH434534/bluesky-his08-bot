@@ -46,10 +46,12 @@ PERSONA_HUMANO = (
     "3) Erros leves de digitação são NORMAIS e humanos: 'vc' no lugar de você, 'q' no lugar de que, às vezes esquece acento. "
     "4) Emoção real de mlk de 18: animação, tédio, empolgação com música/jogo/futebol, reclamação leve da vida, "
     "comentário sobre o dia, zoeira com amigos. "
-    "5) NUNCA: pareça motivacional genérico, nunca liste hashtags, nunca use markdown, nunca escreva como influencer "
-    "de marketing, nunca termine com 'curtam' ou 'sigam'. "
-    "6) Máx 2 emojis por texto, e só emojis que mlk de 18 usa de verdade (fire, risada, sparkles, triste, joia, coração). "
-    "7) Varia o estilo a cada texto: nunca repita estrutura. Às vezes só uma frase, às vezes um desabafo, às vezes zoeira."
+    "5) NUNCA: pareça motivacional genérico, nunca use markdown, nunca escreva como influencer de marketing, "
+    "nunca termine com 'curtam' ou 'sigam'. ""6) HASHTAGS OBRIGATÓRIAS: em QUALQUER post, SEMPRE feche o texto com 2 a 3 hashtags relevantes ao assunto "
+    "(mín 2, máx 3, minúsculas, sem espaços, ex: #música #futebol #vibe). As hashtags contam como parte normal do post, "
+    "não são opcionais e devem ser as últimas palavras do texto. "
+    "7) Máx 2 emojis por texto, e só emojis que mlk de 18 usa de verdade (fire, risada, sparkles, triste, joia, coração). "
+    "8) Varia o estilo a cada texto: nunca repita estrutura. Às vezes só uma frase, às vezes um desabafo, às vezes zoeira."
 )
 
 
@@ -91,11 +93,18 @@ class AIEngine:
             raw = resp.read().decode("utf-8")
             return json.loads(raw) if raw else {}
 
-    def _clean(self, text):
+    def _clean(self, text, limit=300):
         text = (text or "").strip().strip("\"'`")
         # remove emojis duplicados/linhas vazias extras
         lines = [ln for ln in text.splitlines() if ln.strip()]
-        return "\n".join(lines)[:280]
+        joined = "\n".join(lines)
+        if len(joined) <= limit:
+            return joined
+        # nunca cortar no meio de uma palavra/frase: trunca na última palavra completa
+        cut = joined[:limit]
+        if " " in cut:
+            cut = cut.rsplit(" ", 1)[0]
+        return cut.rstrip() + "..." if cut.rstrip() else joined[:limit]
 
     # ------------------------------------------------------------ completions
     def _complete(self, system, user, temperature=0.9):
@@ -204,10 +213,12 @@ class AIEngine:
     def generate_post(self):
         """Gera um post curto, natural, estilo influenciador criativo."""
         sys = persona_system(
-            "Escreva um post curto (máx 200 caracteres) para a sua rede social. "
-            "Pode ser sobre música, jogo, futebol, rolê, faculdade, tédio, crush, zoeira ou o que te passar na cabeça."
+            "Escreva um post de até 280 caracteres (contando as hashtags), SEMPRE COMPLETO até o fim: "
+            "não pare no meio, não corte a frase, escreva o texto inteiro. "
+            "Pode ser sobre música, jogo, futebol, rolê, faculdade, tédio, crush, zoeira ou o que te passar na cabeça. "
+            "SEMPRE feche com 2 a 3 hashtags relevantes (mín 2, máx 3) pra alcançar mais gente."
         )
-        user = "O que você vai postar agora? Escreve como você fala mesmo, do jeito que digitaria no celular."
+        user = "O que você vai postar agora? Escreve como você fala mesmo, do jeito que digitaria no celular, e termina com as hashtags."
         return self._clean(self._complete(sys, user))
 
     def generate_reply(self, original):
@@ -233,13 +244,15 @@ class AIEngine:
     def generate_topic_post(self, topic):
         """Gera um post comentando sobre um assunto que está em alta."""
         sys = persona_system(
-            "Comente o assunto em alta com um post curto (máx 200 caracteres), do jeito que um mlk de 18 comenta "
-            "uma trend ao vivo: opinião sincera, leve, sem parecer jornalista nem copy."
+            "Comente o assunto em alta com um post de até 280 caracteres (contando as hashtags), do jeito que um mlk de 18 "
+            "comenta uma trend ao vivo: opinião sincera, leve, sem parecer jornalista nem copy. "
+            "SEMPRE escreva o post COMPLETO até o fim, sem cortar no meio. "
+            "SEMPRE feche com 2 a 3 hashtags relevantes (mín 2, máx 3) pra alcançar mais gente."
         )
         user = (
             f"O assunto em alta é: \"{topic[:200]}\"\n"
             "Escreva 1 post seu comentando sobre isso, como se você estivesse "
-            "acompanhando a trend ao vivo."
+            "acompanhando a trend ao vivo. Termina com as hashtags."
         )
         return self._clean(self._complete(sys, user, temperature=0.85))
 
