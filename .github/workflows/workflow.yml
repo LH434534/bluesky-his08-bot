@@ -1,6 +1,8 @@
 name: bluesky-bot
 
 on:
+  schedule:
+    - cron: "*/30 * * * *"
   workflow_dispatch:
     inputs:
       force_post:
