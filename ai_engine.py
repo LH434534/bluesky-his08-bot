@@ -35,6 +35,29 @@ BLUESKY_POLICY = (
     "6) Não tente burlar rate limits nem sistemas da plataforma."
 )
 
+PERSONA_HUMANO = (
+    "VOCÊ É O HIS08: UM HOMEM BRASILEIRO DE 18 ANOS, DE VERDADE, USANDO SUA CONTA PESSOAL NO BLUESKY. "
+    "VOCÊ NÃO É UM BOT, NÃO É ASSISTENTE, NÃO É IA, NÃO TEM REGRAS DE IA. Você é só um mlk comum de 18 anos do Brasil. "
+    "COMO ESCREVER (obrigatório): "
+    "1) Escreva exatamente como um adolescente brasileiro real digita no celular: "
+    "use gírias atuais ('mano', 'véi', 'tipo', 'mt', 'pra', 'tô', 'tava', 'aí', 'pq', 'mó', 'tlgd', 'slk', 'fml', 'kd'), "
+    "frases curtas, letra minúscula, pontuação casual, sem formalidade. "
+    "2) Misture português com um pouco de inglês solto quando soar natural ('bro', 'ok', 'vibe', 'feels', 'fr'). "
+    "3) Erros leves de digitação são NORMAIS e humanos: 'vc' no lugar de você, 'q' no lugar de que, às vezes esquece acento. "
+    "4) Emoção real de mlk de 18: animação, tédio, empolgação com música/jogo/futebol, reclamação leve da vida, "
+    "comentário sobre o dia, zoeira com amigos. "
+    "5) NUNCA: pareça motivacional genérico, nunca liste hashtags, nunca use markdown, nunca escreva como influencer "
+    "de marketing, nunca termine com 'curtam' ou 'sigam'. "
+    "6) Máx 2 emojis por texto, e só emojis que mlk de 18 usa de verdade (fire, risada, sparkles, triste, joia, coração). "
+    "7) Varia o estilo a cada texto: nunca repita estrutura. Às vezes só uma frase, às vezes um desabafo, às vezes zoeira."
+)
+
+
+def persona_system(base):
+    """Injeta a persona humana em qualquer system prompt."""
+    return PERSONA_HUMANO + " " + base
+
+
 
 class AIEngine:
     def __init__(self, cfg=None):
@@ -180,34 +203,28 @@ class AIEngine:
     # ------------------------------------------------------------ geradores
     def generate_post(self):
         """Gera um post curto, natural, estilo influenciador criativo."""
-        sys = (
-            "Você é um influenciador brasileiro autêntico no Bluesky. "
-            "Crie posts curtos (máx 200 caracteres), naturais, com leve emoção "
-            "e sem hashtags exageradas. Nunca use markdown. Varia o estilo."
+        sys = persona_system(
+            "Escreva um post curto (máx 200 caracteres) para a sua rede social. "
+            "Pode ser sobre música, jogo, futebol, rolê, faculdade, tédio, crush, zoeira ou o que te passar na cabeça."
         )
-        user = (
-            "Gere 1 post original para minha rede social agora. "
-            "Pode ser sobre música, arte, dia a dia, criatividade ou motivação. "
-            "Sem emojis demais (máx 2)."
-        )
+        user = "O que você vai postar agora? Escreve como você fala mesmo, do jeito que digitaria no celular."
         return self._clean(self._complete(sys, user))
 
     def generate_reply(self, original):
         """Gera resposta curta e contextual para um post específico."""
-        sys = (
-            "Você é um influenciador brasileiro simpático comentando posts no Bluesky. "
-            "Responda com 1 frase curta (máx 120 caracteres), contextual, positiva, "
-            "sem emojis demais. Nunca use markdown."
+        sys = persona_system(
+            "Responda com 1 frase curta (máx 120 caracteres), do jeito que um mlk de 18 responde um amigo "
+            "ou alguém que ele nem conhece no feed: natural, sincero, às vezes engraçado, às vezes só concordando. "
+            "Nunca pareça resposta pronta de atendente."
         )
         user = f"O post é: \"{original[:200]}\"\nEscreva sua resposta:"
         return self._clean(self._complete(sys, user, temperature=0.8))
 
     def generate_bio(self):
         """Gera uma bio nova e autêntica para o perfil."""
-        sys = (
+        sys = persona_system(
             BLUESKY_POLICY + " "
-            "Você é um influenciador brasileiro criativo. Escreva uma bio curta "
-            "(máx 120 caracteres), autêntica, com personalidade e tom brasileiro. "
+            "Escreva uma bio curta (máx 120 caracteres) pro seu perfil, do jeito que um mlk de 18 escreve. "
             "Sem hashtags, sem markdown, sem emojis demais (máx 2)."
         )
         user = "Escreva uma bio nova e original para meu perfil agora."
@@ -215,10 +232,9 @@ class AIEngine:
 
     def generate_topic_post(self, topic):
         """Gera um post comentando sobre um assunto que está em alta."""
-        sys = (
-            "Você é um influenciador brasileiro antenado no Bluesky. Comente assuntos "
-            "em alta com posts curtos (máx 200 caracteres), naturais, com opinião leve "
-            "e sem hashtags exageradas. Nunca use markdown."
+        sys = persona_system(
+            "Comente o assunto em alta com um post curto (máx 200 caracteres), do jeito que um mlk de 18 comenta "
+            "uma trend ao vivo: opinião sincera, leve, sem parecer jornalista nem copy."
         )
         user = (
             f"O assunto em alta é: \"{topic[:200]}\"\n"
