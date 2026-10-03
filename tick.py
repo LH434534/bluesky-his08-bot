@@ -553,7 +553,7 @@ if not rate_limited:
             if bio and safe_update_profile(description=bio):
                 state["bio_date"] = today()
                 print(f"  [bio] atualizada: {bio}")
-                sleep_human(5, 15)
+                sleep_human(2, 6)
         except Exception as e:
             print("  [erro bio]", e)
 
