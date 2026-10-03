@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """ai_engine.py — camada de IA para o bot Bluesky (stdlib only).
 Providers suportados (via env):
+  OLLAMA_FREE=1       -> OllamaFreeAPI (GitHub mfoud444/ollamafreeapi): GRÁTIS, sem key, llama/qwen/deepseek/mistral
   OPENAI_API_KEY     -> api.openai.com (chat completions, modelo gpt-4o-mini por padrão)
   ANTHROPIC_API_KEY  -> api.anthropic.com (messages, modelo claude-3-haiku por padrão)
   GEMINI_API_KEY     -> generativelanguage.googleapis.com (gemini-1.5-flash por padrão)
@@ -28,6 +29,8 @@ class AIEngine:
 
     # ------------------------------------------------------------ providers
     def _detect_provider(self):
+        if os.environ.get("OLLAMA_FREE", "").strip().lower() in ("1", "true", "yes", "sim"):
+            return "ollamafree"
         if os.environ.get("OPENAI_API_KEY"):
             return "openai"
         if os.environ.get("ANTHROPIC_API_KEY"):
@@ -57,6 +60,16 @@ class AIEngine:
 
     # ------------------------------------------------------------ completions
     def _complete(self, system, user, temperature=0.9):
+        if self.provider == "ollamafree":
+            # GitHub: mfoud444/ollamafreeapi — API pública gratuita (sem key)
+            model = os.environ.get("OLLAMA_FREE_MODEL", "llama3.2:3b")
+            try:
+                from ollamafreeapi import OllamaFreeAPI
+            except ImportError as e:
+                raise RuntimeError("ollamafreeapi não instalado (pip install ollamafreeapi)") from e
+            client = OllamaFreeAPI()
+            return client.chat(model=model, prompt=f"{system}\n\n{user}", temperature=temperature)
+
         if self.provider == "openai":
             key = os.environ["OPENAI_API_KEY"]
             model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
