@@ -22,6 +22,7 @@ import os
 import random
 import sys
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 
@@ -166,6 +167,82 @@ class BskyClient:
 
     def timeline(self, limit=30):
         return self._req(f"/app.bsky.feed.getTimeline?limit={limit}")
+
+    def _req_raw(self, path, data, content_type):
+        url = API + path
+        headers = {
+            "Content-Type": content_type,
+            "Authorization": "Bearer " + self.jwt,
+            "Accept": "application/json",
+        }
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "ignore")
+            raise RuntimeError(f"HTTP {e.code}: {body}")
+        except Exception as e:
+            raise RuntimeError(f"erro de rede: {e}")
+
+    # --- perfil (bio + avatar) ---
+    def get_profile(self):
+        q = urllib.parse.quote(self.did, safe="")
+        return self._req(f"/app.bsky.actor.getProfile?actor={q}")
+
+    def upload_blob(self, data, content_type):
+        """Envia uma imagem e devolve o blob ref pronto para usar no profile."""
+        return self._req_raw("/com.atproto.repo.uploadBlob", data, content_type)
+
+    def update_profile(self, display_name=None, description=None, avatar_blob=None):
+        record = {"$type": "app.bsky.actor.profile"}
+        if display_name is not None:
+            record["displayName"] = display_name
+        if description is not None:
+            record["description"] = description
+        if avatar_blob is not None:
+            record["avatar"] = avatar_blob
+        return self._req("/com.atproto.repo.putRecord", {
+            "repo": self.did,
+            "collection": "app.bsky.actor.profile",
+            "rkey": "self",
+            "record": record
+        }, method="POST")
+
+    # --- feeds / trending ---
+    def get_feed(self, feed_uri, limit=20):
+        q = urllib.parse.quote(feed_uri, safe="")
+        return self._req(f"/app.bsky.feed.getFeed?feed={q}&limit={limit}")
+
+    def search_posts(self, query, limit=10):
+        q = urllib.parse.quote(query, safe="")
+        return self._req(f"/app.bsky.feed.searchPosts?q={q}&limit={limit}")
+
+    # --- interações extras ---
+    def follow(self, subject_did):
+        rec = {
+            "$type": "app.bsky.graph.follow",
+            "subject": subject_did,
+            "createdAt": datetime_now_iso()
+        }
+        return self._req("/com.atproto.repo.createRecord", {
+            "repo": self.did,
+            "collection": "app.bsky.graph.follow",
+            "record": rec
+        }, method="POST")
+
+    def repost(self, uri, cid):
+        rec = {
+            "$type": "app.bsky.feed.repost",
+            "subject": {"uri": uri, "cid": cid},
+            "createdAt": datetime_now_iso()
+        }
+        return self._req("/com.atproto.repo.createRecord", {
+            "repo": self.did,
+            "collection": "app.bsky.feed.repost",
+            "record": rec
+        }, method="POST")
 
 
 def datetime_now_iso():
