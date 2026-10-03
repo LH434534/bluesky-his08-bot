@@ -211,6 +211,10 @@ class BskyClient:
         }, method="POST")
 
     # --- feeds / trending ---
+    def get_popular(self, limit=20):
+        """Posts em alta (What's Hot nativo do Bluesky)."""
+        return self._req(f"/app.bsky.unspecced.getPopular?limit={limit}")
+
     def get_feed(self, feed_uri, limit=20):
         q = urllib.parse.quote(feed_uri, safe="")
         return self._req(f"/app.bsky.feed.getFeed?feed={q}&limit={limit}")
