@@ -4,6 +4,17 @@ on:
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
+    inputs:
+      force_post:
+        description: "Publicar post imediatamente"
+        required: false
+        default: "false"
+        type: boolean
+      force_text:
+        description: "Texto do post forçado"
+        required: false
+        default: "🔥 Primeiro post do bot no ar! Sigam @his08.bsky.social e fiquem ligados."
+        type: string
 
 jobs:
   run:
@@ -16,4 +27,6 @@ jobs:
         env:
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
+          BSKY_FORCE_POST: ${{ github.event.inputs.force_post }}
+          BSKY_FORCE_TEXT: ${{ github.event.inputs.force_text }}
         run: python3 tick.py
