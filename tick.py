@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """tick.py — execução única do bot (usado pelo GitHub Actions).
-Login -> posta se bater com o horário agendado -> 1 rodada de engajamento -> sai.
-Limites por tick: 3 likes / 1 reply (cron 15min => 12 likes e 4 replies por hora)."""
+Login -> posta se bater com o horário agendado (texto: IA ou fallback) ->
+1 rodada de engajamento (replies: IA ou fallback) -> sai.
+Limites por tick: 3 likes / 1 reply (cron 15min => 12 likes e 4 replies por hora).
+
+Env de IA (opcionais — sem nenhuma, o bot usa textos fixos):
+  OPENAI_API_KEY | ANTHROPIC_API_KEY | GEMINI_API_KEY | AI_API_KEY(+AI_API_URL+AI_MODEL)
+  IA_ENABLED=1/true  -> força uso da IA (se indisponível, loga aviso e segue fallback)
+"""
 import json
 import os
 import random
@@ -12,6 +18,7 @@ import time
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 import bluesky_agent as ba
+import ai_engine as aie
 
 cfg = ba.load_config()
 
@@ -27,32 +34,57 @@ except RuntimeError as e:
     print("[falha] login:", e)
     sys.exit(1)
 
+ai = aie.AIEngine()
+ia_ok = ai.available()
+ia_forced = os.environ.get("IA_ENABLED", "").strip().lower() in ("1", "true", "yes", "sim")
+if ia_ok:
+    print(f"[ia] provider={ai.provider} — conteúdo gerado por IA")
+elif ia_forced:
+    print("[ia] IA_ENABLED=1 mas nenhuma chave de API encontrada; usando fallback fixo")
+
 now = time.localtime()
 cur_min = now.tm_hour * 60 + now.tm_min
 
 force_post = os.environ.get("BSKY_FORCE_POST", "").strip().lower() in ("1", "true", "yes", "sim")
 
-# 1) post agendado (tolerância 5 min) ou post forçado
+# 1) post forçado (texto do input OU gerado por IA se marcado)
 if force_post:
-    texto = os.environ.get("BSKY_FORCE_TEXT", "🔥 Primeiro post do bot no ar! Sigam @his08.bsky.social e fiquem ligados.")
+    texto = os.environ.get("BSKY_FORCE_TEXT", "").strip()
+    if not texto and ia_ok:
+        try:
+            texto = ai.generate_post()
+            print("  [ia] post gerado")
+        except Exception as e:
+            print("  [erro ia]", e)
+    if not texto:
+        texto = "🔥 Primeiro post do bot no ar! Sigam @his08.bsky.social e fiquem ligados."
     try:
         client.create_post(texto)
         print(f"  [post-forcado] {texto}")
     except RuntimeError as e:
         print("  [erro post]", e)
 
+# 2) post agendado (tolerância 5 min)
 for s in cfg["schedule"]:
     if s.get("action") != "post":
         continue
     target = s["hour"] * 60 + s["minute"]
-    if abs(cur_min - target) <= 5:
+    if abs(cur_min - target) > 5:
+        continue
+    texto = s["content"]
+    if ia_ok:
         try:
-            client.create_post(s["content"])
-            print(f"  [post] {s['content']}")
-        except RuntimeError as e:
-            print("  [erro post]", e)
+            texto = ai.generate_post()
+            print("  [ia] post agendado gerado")
+        except Exception as e:
+            print("  [erro ia]", e, "— usando texto fixo")
+    try:
+        client.create_post(texto)
+        print(f"  [post] {texto}")
+    except RuntimeError as e:
+        print("  [erro post]", e)
 
-# 2) engajamento: 1 rodada, máx 3 likes / 1 reply por tick
+# 3) engajamento: 1 rodada, máx 3 likes / 1 reply por tick
 if cfg["engagement"].get("enabled", False):
     likes_done = 0
     reply_done = 0
@@ -74,13 +106,17 @@ if cfg["engagement"].get("enabled", False):
                 except RuntimeError as e:
                     print("  [erro like]", e)
             if reply_done < 1:
+                reply_text = random.choice(cfg["engagement"]["reply_templates"])
+                if ia_ok:
+                    try:
+                        reply_text = ai.generate_reply(text)
+                        print("  [ia] reply gerado")
+                    except Exception as e:
+                        print("  [erro ia]", e, "— usando template fixo")
                 try:
-                    client.reply(
-                        random.choice(cfg["engagement"]["reply_templates"]),
-                        uri, cid, uri, cid
-                    )
+                    client.reply(reply_text, uri, cid, uri, cid)
                     reply_done += 1
-                    print(f"  [reply] {text[:50]}")
+                    print(f"  [reply] {reply_text}")
                 except RuntimeError as e:
                     print("  [erro reply]", e)
             if likes_done >= 3 and reply_done >= 1:
