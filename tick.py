@@ -98,6 +98,17 @@ for s in cfg["schedule"]:
     except RuntimeError as e:
         print("  [erro post]", e)
 
+# 2.5) post extra ocasional (modo dono): gera conteúdo IA fora do agendado,
+#      com probabilidade baixa por tick p/ parecer humano sem virar spam.
+extra_prob = float(os.environ.get("BSKY_EXTRA_POST_PROB", "0.05"))
+if ia_ok and random.random() < extra_prob:
+    try:
+        texto = ai.generate_post()
+        client.create_post(texto)
+        print(f"  [post-extra] {texto}")
+    except Exception as e:
+        print("  [erro post-extra]", e)
+
 # 3) engajamento: 1 rodada, máx 3 likes / 1 reply por tick
 if cfg["engagement"].get("enabled", False):
     likes_done = 0
