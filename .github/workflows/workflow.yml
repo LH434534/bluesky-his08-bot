@@ -26,17 +26,20 @@ on:
         default: "false"
         type: boolean
 
+permissions:
+  contents: read
+
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
 
       - name: Instalar dependências de IA
         run: pip install -U g4f --quiet || echo "sem pacote gratuito, segue fallback"
 
-      - name: Rodar bot
+      - name: Rodar bot autônomo
         env:
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
