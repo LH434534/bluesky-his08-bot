@@ -12,18 +12,31 @@
   ],
   "engagement": {
     "enabled": true,
-    "max_likes_per_hour": 16,
-    "max_replies_per_hour": 6,
     "follow_keywords": ["bluesky", "música", "arte", "criador", "meme", "cultura", "vida", "ideia", "trending", "brasil"],
     "reply_templates": [
       "Boa! 🔥",
       "Concordo demais!",
       "Muito bom isso.",
       "Tô nessa também!",
-      "Isso aí! 👏"
+      "Isso aí! 👏",
+      "kkkk muito isso",
+      "simm, exatamente",
+      "caraca, não tinha pensado nisso",
+      "véi, que bom demais",
+      "manda mais conteúdo assim",
+      "curti demais essa visão",
+      "vdd, né",
+      "melhor take do dia",
+      "hahaha perfeito",
+      "pode crer",
+      "brabo demais 🔥",
+      "fala mais sobre isso",
+      "tava pensando nisso agora pouco",
+      "nossa, real",
+      "que daora"
     ],
     "cooldown_seconds": 25,
-    "jitter_seconds": 15
+    "jitter_seconds": 30
   },
   "autonomy": {
     "trending_enabled": true,
@@ -32,9 +45,29 @@
     "extra_post_prob": 0.06,
     "bio_daily_prob": 0.55,
     "avatar_daily_prob": 0.12,
-    "follow_prob": 0.1,
+    "follow_prob": 0.05,
     "max_likes_per_tick": 4,
     "max_replies_per_tick": 2
+  },
+  "anti_spam": {
+    "max_likes_per_day": 60,
+    "max_replies_per_day": 20,
+    "max_posts_per_day": 10,
+    "max_follows_per_day": 2,
+    "max_likes_per_hour": 10,
+    "max_replies_per_hour": 4,
+    "max_authors_per_day": 12,
+    "max_reply_age_days": 7,
+    "pause_like": [8, 20],
+    "pause_reply": [10, 25],
+    "pause_block": [30, 90],
+    "pause_pre_post": [60, 180],
+    "night_start_min": 1410,
+    "night_end_min": 450,
+    "act_prob_day": 0.9,
+    "act_prob_night": 0.15,
+    "skip_like_prob": 0.25,
+    "max_state_seen": 3000
   },
   "safety": {
     "dry_run": false,
