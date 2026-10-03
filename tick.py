@@ -105,15 +105,25 @@ except RuntimeError as e:
 trending_posts = []
 trending_feed = auto.get("trending_feed", "at://did:plc:z72i7hdynmk6r22z27h6tv6ah/app.bsky.feed.generator/whats-hot")
 if auto.get("trending_enabled", True):
-    for feed_uri in (trending_feed, "at://did:plc:z72i7hdynmk6r22z27h6tv6ah/app.bsky.feed.generator/discover"):
-        try:
-            hot = client.get_feed(feed_uri, limit=15)
-            trending_posts = [it for it in hot.get("feed", []) if it.get("post")]
-            if trending_posts:
-                print(f"[contexto] feed em alta lido: {len(trending_posts)} posts")
-                break
-        except RuntimeError as e:
-            print("  [erro trending]", e)
+    # 1) fonte nativa: posts populares (What's Hot do Bluesky)
+    try:
+        hot = client.get_popular(limit=20)
+        trending_posts = [it for it in hot.get("feed", []) if it.get("post")]
+        if trending_posts:
+            print(f"[contexto] posts em alta lidos: {len(trending_posts)}")
+    except RuntimeError as e:
+        print("  [erro trending]", e)
+    # 2) fallback: feed custom
+    if not trending_posts:
+        for feed_uri in (trending_feed, "at://did:plc:z72i7hdynmk6r22z27h6tv6ah/app.bsky.feed.generator/discover"):
+            try:
+                hot = client.get_feed(feed_uri, limit=15)
+                trending_posts = [it for it in hot.get("feed", []) if it.get("post")]
+                if trending_posts:
+                    print(f"[contexto] feed em alta lido: {len(trending_posts)} posts")
+                    break
+            except RuntimeError as e:
+                print("  [erro trending]", e)
 
 force_post = os.environ.get("BSKY_FORCE_POST", "").strip().lower() in ("1", "true", "yes", "sim")
 cur_min = time.localtime().tm_hour * 60 + time.localtime().tm_min
