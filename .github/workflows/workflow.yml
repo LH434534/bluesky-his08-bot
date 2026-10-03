@@ -37,19 +37,19 @@ on:
         type: boolean
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
       - name: Instalar dependências de IA
         run: pip install -U g4f --quiet || echo "sem pacote gratuito, segue fallback"
 
-      - name: Rodar bot autônomo
+      - name: Rodar bot autônomo (anti-ban extremo)
         env:
           BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
           BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
@@ -60,6 +60,7 @@ jobs:
           BSKY_FORCE_BIO: ${{ github.event.inputs.force_bio }}
           BSKY_FORCE_AVATAR: ${{ github.event.inputs.force_avatar }}
           G4F: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
