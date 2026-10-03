@@ -286,7 +286,11 @@ if ia_ok and (trending_posts or trending_topics) and random.random() < trend_pro
 
 # ------------------------------------------------------------ 5) perfil: bio + avatar
 def safe_update_profile(**kw):
-    """Mescla com o profile atual para não apagar displayName/bio/avatar existentes."""
+    """Mescla com o profile atual para não apagar displayName/bio existentes.
+
+    avatar só é enviado quando um blob novo é passado (avatar_blob). O avatar
+    atual NÃO é reenviado (o servidor mantém por merge quando omitido).
+    """
     try:
         cur = client.get_profile() or {}
     except RuntimeError as e:
@@ -294,7 +298,7 @@ def safe_update_profile(**kw):
         cur = {}
     display_name = kw.get("display_name", cur.get("displayName"))
     description = kw.get("description", cur.get("description"))
-    avatar = kw.get("avatar_blob", cur.get("avatar"))
+    avatar = kw.get("avatar_blob")  # None = não mexer no avatar
     try:
         client.update_profile(display_name=display_name, description=description, avatar_blob=avatar)
         return True
@@ -337,5 +341,13 @@ if force_avatar or (avatar_prob > 0 and chance("avatar", avatar_prob)):
                 break
         except Exception as e:
             print("  [erro avatar]", e)
+
+# verificação do estado final do perfil
+try:
+    p = client.get_profile() or {}
+    bio_now = (p.get("description") or "").replace("\n", " ")[:120]
+    print(f"[perfil] displayName={p.get('displayName')!r} bio={bio_now!r} avatar={'OK' if p.get('avatar') else 'vazio'}")
+except RuntimeError as e:
+    print("  [erro get_profile-final]", e)
 
 print("[i] tick concluído.")
