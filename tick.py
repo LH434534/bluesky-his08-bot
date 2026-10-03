@@ -12,7 +12,7 @@ ANTI-BAN / HUMANIZAÇÃO (o objetivo é NUNCA parecer robô):
   - estado persistente em state.json (repo): contadores diários/horários,
     dedupe global de URIs, autores já interagidos, histórico de textos
   - janela noturna: 23:30–07:30 sem engajamento/posts extras/trending
-  - probabilidade de "presença" por tick (dia ~90%, noite ~15%)
+  - probabilidade de "presença" por tick (dia ~90%, noite ~40%)
   - pausas humanas longas e aleatórias entre ações e blocos
   - limites por dia/hora/tick conservadores
   - nunca curtir/responder o próprio post, posts repetidos, autores repetidos,
@@ -504,8 +504,9 @@ if not rate_limited:
         safe_post(texto, "agendado")
         break
 
-    extra_prob = auto.get("extra_post_prob", 0.06)
-    if not is_night and ia_ok and random.random() < extra_prob:
+    extra_prob = auto.get("extra_post_prob", 0.65)
+    night_mult = 0.4 if is_night else 1.0
+    if ia_ok and random.random() < extra_prob * night_mult:
         try:
             sleep_human(*asp.get("pause_pre_post", [60, 180]))
             safe_post(ai.generate_post(), "extra")
