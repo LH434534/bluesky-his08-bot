@@ -1,6 +1,6 @@
 {
   "handle": "his08.bsky.social",
-  "app_password": "zbbu-tj2x-lziw-njyf",
+  "app_password": "",
   "schedule": [
     {"action": "post", "hour": 8,  "minute": 0,  "content": "Bom dia, família! ☕ Começando o dia por aqui."},
     {"action": "post", "hour": 10, "minute": 30, "content": "Pausa pra pensar um pouco sobre a vida."},
@@ -12,17 +12,29 @@
   ],
   "engagement": {
     "enabled": true,
-    "max_likes_per_hour": 12,
-    "max_replies_per_hour": 4,
-    "follow_keywords": ["bluesky", "música", "arte", "criador", "meme", "cultura", "vida", "ideia"],
+    "max_likes_per_hour": 16,
+    "max_replies_per_hour": 6,
+    "follow_keywords": ["bluesky", "música", "arte", "criador", "meme", "cultura", "vida", "ideia", "trending", "brasil"],
     "reply_templates": [
       "Boa! 🔥",
       "Concordo demais!",
       "Muito bom isso.",
-      "Tô nessa também!"
+      "Tô nessa também!",
+      "Isso aí! 👏"
     ],
-    "cooldown_seconds": 45,
-    "jitter_seconds": 20
+    "cooldown_seconds": 25,
+    "jitter_seconds": 15
+  },
+  "autonomy": {
+    "trending_enabled": true,
+    "trending_feed": "at://did:plc:z72i7hdynmk6r22z27h6tv6ah/app.bsky.feed.generator/whats-hot",
+    "trending_post_prob": 0.35,
+    "extra_post_prob": 0.06,
+    "bio_daily_prob": 0.55,
+    "avatar_daily_prob": 0.12,
+    "follow_prob": 0.1,
+    "max_likes_per_tick": 4,
+    "max_replies_per_tick": 2
   },
   "safety": {
     "dry_run": false,
