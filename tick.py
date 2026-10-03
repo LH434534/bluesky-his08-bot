@@ -37,10 +37,24 @@ except RuntimeError as e:
 ai = aie.AIEngine()
 ia_ok = ai.available()
 ia_forced = os.environ.get("IA_ENABLED", "").strip().lower() in ("1", "true", "yes", "sim")
+test_only = os.environ.get("BSKY_AI_TEST_ONLY", "").strip().lower() in ("1", "true", "yes", "sim")
 if ia_ok:
-    print(f"[ia] provider={ai.provider} — conteúdo gerado por IA")
+    print(f"[ia] provider={ai.provider} — conteúdo gerado por IA" + (" [TESTE, sem publicar]" if test_only else ""))
 elif ia_forced:
-    print("[ia] IA_ENABLED=1 mas nenhuma chave de API encontrada; usando fallback fixo")
+    print("[ia] IA_ENABLED=1 mas nenhum provider de IA disponível; usando fallback fixo")
+
+# 0) teste de IA: gera conteúdo, loga e sai SEM publicar
+if test_only:
+    if not ia_ok:
+        print("[teste] nenhum provider de IA disponível")
+        sys.exit(0)
+    try:
+        print("[teste] post :", ai.generate_post())
+        print("[teste] reply:", ai.generate_reply("Que dia lindo hoje, a música tá no ar!"))
+    except Exception as e:
+        print("[teste] erro:", e)
+    print("[i] tick concluído (modo teste).")
+    sys.exit(0)
 
 now = time.localtime()
 cur_min = now.tm_hour * 60 + now.tm_min
