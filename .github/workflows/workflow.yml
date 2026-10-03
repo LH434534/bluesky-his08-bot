@@ -25,6 +25,16 @@ on:
         required: false
         default: "false"
         type: boolean
+      force_bio:
+        description: "Atualizar a bio do perfil agora"
+        required: false
+        default: "false"
+        type: boolean
+      force_avatar:
+        description: "Trocar a foto de perfil agora"
+        required: false
+        default: "false"
+        type: boolean
 
 permissions:
   contents: read
@@ -47,6 +57,8 @@ jobs:
           BSKY_FORCE_TEXT: ${{ github.event.inputs.force_text }}
           IA_ENABLED: ${{ github.event.inputs.ia_enabled }}
           BSKY_AI_TEST_ONLY: ${{ github.event.inputs.ai_test_only }}
+          BSKY_FORCE_BIO: ${{ github.event.inputs.force_bio }}
+          BSKY_FORCE_AVATAR: ${{ github.event.inputs.force_avatar }}
           G4F: "1"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
