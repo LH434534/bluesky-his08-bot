@@ -108,6 +108,9 @@ _STATE_DEFAULTS = {
     "seen_uris": [], "reply_history": [], "post_history": [],
     "bio_date": "", "avatar_date": "", "sched_done": {}, "last_heartbeat": "",
     "last_run_id": "",
+    # camada anti-ban extrema (persistida entre ticks/ciclos)
+    "action_log": [], "last_social_ts": "", "blocked_until": "",
+    "author_last_ts": {},
 }
 
 
@@ -228,6 +231,69 @@ def budget_ok(key, limit):
     return state.get(key, 0) < limit
 
 
+# ------------------------------------------------------------ anti-ban extremo
+def _parse_ts(iso):
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def _blocked_reason():
+    """Motivo do modo proteção persistente (escrita pausada) ou None."""
+    bu = state.get("blocked_until") or ""
+    ts = _parse_ts(bu) if bu else None
+    if ts and time.time() < ts:
+        mins = int((ts - time.time()) // 60)
+        return f"modo proteção anti-ban ativo (~{mins} min restantes)"
+    if bu:
+        state["blocked_until"] = ""   # expirou: libera
+    return None
+
+
+def _rate_remaining():
+    """Mínimo de requisições restantes informado pelo PDS; -1 = sem informação."""
+    h = getattr(client, "last_rate_headers", {}) or {}
+    for k in ("ratelimit-remaining", "x-ratelimit-remaining"):
+        if h.get(k) is not None:
+            try:
+                return int(h[k])
+            except Exception:
+                return -1
+    return -1
+
+
+def _set_block(mins, tag, cause, action="modo_protecao"):
+    ts = datetime.now(timezone.utc).timestamp() + mins * 60
+    state["blocked_until"] = datetime.fromtimestamp(ts, timezone.utc).isoformat()
+    INCIDENTS.add(tag, context="tick", cause=cause[:150], action=action, outcome="ok")
+
+
+def burst_ok():
+    """Guarda anti-rajada: no máx. N ações de escrita em janela de M minutos."""
+    win = asp.get("burst_window_min", 10)
+    mx = asp.get("burst_max_per_10min", 5)
+    cutoff = time.time() - win * 60
+    state["action_log"] = [t for t in state.get("action_log", []) if t >= cutoff]
+    return len(state["action_log"]) < mx
+
+
+def social_gap_ok():
+    """Gap mínimo entre ações sociais (evita rajada mesmo dentro do tick)."""
+    last = state.get("last_social_ts") or ""
+    ts = _parse_ts(last) if last else None
+    if ts is None:
+        return True
+    return (time.time() - ts) >= asp.get("min_social_gap_s", 45)
+
+
+def record_action():
+    """Registra uma ação de escrita para as guardas anti-burst/gap."""
+    state.setdefault("action_log", []).append(time.time())
+    state["action_log"] = state["action_log"][-120:]
+    state["last_social_ts"] = datetime.now(timezone.utc).isoformat()
+
+
 def save_state():
     """Persiste estado: cache local SEMPRE; repo com retry + merge em 409."""
     if not (REPO and GH_TOKEN):
@@ -334,6 +400,15 @@ def can_engage(info):
         return False
     if info["did"] in state["authors_today"]:
         return False
+    # cooldown por autor: não voltar ao mesmo perfil em poucos minutos
+    cooldown = asp.get("author_cooldown_min", 90)
+    last = state.get("author_last_ts", {}).get(info["did"])
+    if last:
+        try:
+            if time.time() - float(last) < cooldown * 60:
+                return False
+        except Exception:
+            pass
     if is_spamish(info):
         return False
     max_age = asp.get("max_reply_age_days", 7)
@@ -347,6 +422,7 @@ def mark_engaged(info, action):
     state["seen_uris"].append(info["uri"])
     if info["did"] not in state["authors_today"]:
         state["authors_today"].append(info["did"])
+    state.setdefault("author_last_ts", {})[info["did"]] = time.time()
     max_seen = asp.get("max_state_seen", 3000)
     if len(state["seen_uris"]) > max_seen:
         state["seen_uris"] = state["seen_uris"][-max_seen:]
@@ -354,6 +430,7 @@ def mark_engaged(info, action):
     if len(state["authors_today"]) > max_auth:
         state["authors_today"] = state["authors_today"][-max_auth:]
     bump("likes" if action == "like" else "replies")
+    record_action()
 
 
 # ------------------------------------------------------------ 0) modo teste
@@ -463,20 +540,52 @@ likes_done = 0
 replies_done = 0
 rate_limited = False
 
+# ---- anti-ban extremo: modo proteção persistente + rate headers do PDS
+block_reason = _blocked_reason()
+if block_reason:
+    print(f"[anti-ban] {block_reason} — apenas leitura neste tick")
+_rate_now = _rate_remaining()
+if _rate_now >= 0 and _rate_now <= asp.get("min_rate_remaining", 3):
+    print(f"[anti-ban] PDS rate limit baixo ({_rate_now}) — sem escrita neste tick")
+    rate_limited = True
+social_ok = (not is_night) and (not rate_limited) and bsky_ok and (not block_reason) \
+            and burst_ok() and social_gap_ok()
+if not social_ok and not block_reason and not is_night and bsky_ok and not rate_limited:
+    print("[anti-ban] guarda anti-rajada ativa (burst/gap) — sem interação social neste tick")
+
 
 def rate_stop(exc):
-    """Marca rate limit; tick para e sai com exit 2 (não re-disparar imediato)."""
+    """Escalada anti-ban: 403 => modo proteção longo; 401 => pausa curta;
+    429/408/420 => pausa anti-burst; 5xx => só para este tick."""
     global rate_limited, FINAL_EXIT
     msg = str(exc)
-    if any(t in msg for t in ("429", "403", "408", "420", "500", "502", "503", "RateLimit", "enhance your calm")):
-        rate_limited = True
-        FINAL_EXIT = 2
-        METRICS.error("bsky.rate_limit")
+    code = None
+    m = re.search(r"HTTP (\d{3})", msg)
+    if m:
+        code = int(m.group(1))
+    hit = any(t in msg for t in ("429", "403", "408", "420", "500", "502", "503", "RateLimit", "enhance your calm"))
+    if not hit and code not in (401,):
+        return False
+    rate_limited = True
+    FINAL_EXIT = 2
+    METRICS.error("bsky.rate_limit")
+    if code == 403 or "403" in msg:
+        _set_block(asp.get("block_403_min", 180), "bsky.block_403", msg)
+        print(f"  [anti-ban] 403 (possível bloqueio da conta) — modo proteção por "
+              f"{asp.get('block_403_min', 180)} min, sem escrita")
+    elif code == 401 or "401" in msg:
+        _set_block(asp.get("block_ratelimit_min", 30), "bsky.auth_invalid", msg)
+        print(f"  [anti-ban] 401 (sessão inválida) — pausa de "
+              f"{asp.get('block_ratelimit_min', 30)} min para revalidar")
+    elif code in (429, 408, 420) or any(t in msg for t in ("RateLimit", "enhance your calm")):
+        _set_block(asp.get("block_ratelimit_min", 30), "bsky.rate_limit", msg, action="parar_tick")
+        print(f"  [anti-ban] rate limit detectado — pausa anti-burst de "
+              f"{asp.get('block_ratelimit_min', 30)} min")
+    else:
         INCIDENTS.add("bsky.rate_limit", context="tick", cause=msg[:150],
                       action="parar_tick", outcome="ok")
-        print("  [anti-ban] rate limit detectado — parando ações deste tick")
-        return True
-    return False
+        print("  [anti-ban] erro de servidor detectado — parando ações deste tick")
+    return True
 
 
 def do_like(info):
@@ -547,7 +656,7 @@ def do_reply(info, text=None):
 
 
 # ------------------------------------------------------------ 2) engajamento (só de dia)
-if not is_night and not rate_limited and bsky_ok:
+if social_ok:
     for item in timeline_posts:
         if likes_done >= max_likes_tick and replies_done >= max_replies_tick:
             break
@@ -561,7 +670,7 @@ if not is_night and not rate_limited and bsky_ok:
                 do_reply(info)
     sleep_human(*asp.get("pause_block", [30, 90]))
 
-if not is_night and not rate_limited and bsky_ok:
+if social_ok:
     for item in trending_posts:
         if likes_done >= max_likes_tick and replies_done >= max_replies_tick:
             break
@@ -575,7 +684,7 @@ if not is_night and not rate_limited and bsky_ok:
 
 # follow ocasional (só de dia, raro)
 follow_prob = auto.get("follow_prob", 0.0)
-if not is_night and not rate_limited and bsky_ok and follow_prob > 0 and random.random() < follow_prob:
+if social_ok and follow_prob > 0 and random.random() < follow_prob:
     if budget_ok("follows", asp.get("max_follows_per_day", 2)):
         candidate = next((post_info(it) for it in (trending_posts + timeline_posts)
                           if post_info(it).get("did") and post_info(it).get("did") != client.did
@@ -584,6 +693,7 @@ if not is_night and not rate_limited and bsky_ok and follow_prob > 0 and random.
             try:
                 client.follow(candidate["did"])
                 bump("follows")
+                record_action()
                 METRICS.inc("follows_ok")
                 BSKY_CB.record_success()
                 print(f"  [follow] @{candidate['handle']}")
@@ -609,6 +719,7 @@ def safe_post(texto, tag):
     try:
         client.create_post(texto)
         bump("posts")
+        record_action()
         state["post_history"].append(texto)
         state["post_history"] = state["post_history"][-30:]
         METRICS.inc("posts_ok")
@@ -622,7 +733,7 @@ def safe_post(texto, tag):
         rate_stop(e)
 
 
-if not rate_limited and bsky_ok:
+if not rate_limited and bsky_ok and not block_reason:
     if force_post:
         texto = os.environ.get("BSKY_FORCE_TEXT", "").strip()
         if not texto and ia_use:
@@ -639,10 +750,14 @@ if not rate_limited and bsky_ok:
         safe_post(texto, "forcado")
 
     cur_min = time.localtime().tm_hour * 60 + time.localtime().tm_min
+    jit = asp.get("schedule_jitter_min", 20)
     for s in cfg.get("schedule", []):
         if s.get("action") != "post":
             continue
         target = s["hour"] * 60 + s["minute"]
+        # jitter determinístico por dia: humano não posta sempre no minuto redondo
+        seed = day_seed(f"sched:{s['hour']:02d}:{s['minute']:02d}")
+        target += (seed % (2 * jit + 1)) - jit
         # janela de 15 min (cron */30 pode atrasar com g4f lento) + guarda anti-duplicata
         if abs(cur_min - target) > 15:
             continue
