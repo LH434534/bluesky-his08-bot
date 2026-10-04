@@ -178,6 +178,9 @@ class AIEngine:
             return False
         if _ALL_CAPS_RE.search(text):
             return False
+        # texto sem corpo real (ex.: só hashtags quando a IA falha)
+        if len(bot_utils.norm_key(re.sub(r"#\S+", "", text), 60)) < 8:
+            return False
         if bot_utils.similar_to_history(text, history, 40):
             return False
         return True
