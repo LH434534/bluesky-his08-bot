@@ -186,32 +186,41 @@ class AIEngine:
     def _complete(self, system, user, temperature=0.9):
         if self.provider == "g4f":
             # GitHub: xtekky/gpt4free — IA gratuita sem key (model=auto escolhe provedor)
-            # timeout de 50s por chamada para não travar o tick (g4f pode pendurar)
+            # timeout de 50s por chamada: usa thread DAEMON para o tick nunca ficar
+            # preso se o g4f pendurar (ThreadPoolExecutor.__exit__ faria wait=True).
             try:
                 from g4f.client import Client as G4FClient
             except ImportError as e:
                 raise RuntimeError("g4f não instalado (pip install -U g4f)") from e
-            import concurrent.futures
+            import threading
+
+            box = {}
 
             def _call():
-                client = G4FClient()
-                resp = client.chat.completions.create(
-                    model="auto",
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user},
-                    ],
-                    web_search=False,
-                )
-                return resp.choices[0].message.content
+                try:
+                    client = G4FClient()
+                    resp = client.chat.completions.create(
+                        model="auto",
+                        messages=[
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                        web_search=False,
+                    )
+                    box["ok"] = resp.choices[0].message.content
+                except Exception as e:
+                    box["err"] = e
 
-            try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                    fut = ex.submit(_call)
-                    return fut.result(timeout=50)
-            except Exception as e:
-                print("  [ia] g4f timeout/falha:", type(e).__name__, str(e)[:120])
+            t = threading.Thread(target=_call, daemon=True)
+            t.start()
+            t.join(timeout=50)
+            if t.is_alive():
+                print("  [ia] g4f timeout (50s) — abortando chamada")
                 return None
+            if "err" in box:
+                print("  [ia] g4f falha:", type(box["err"]).__name__, str(box["err"])[:120])
+                return None
+            return box.get("ok")
 
         if self.provider == "ollamafree":
             # GitHub: mfoud444/ollamafreeapi — API pública gratuita (sem key)
