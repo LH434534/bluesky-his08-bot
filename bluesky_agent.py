@@ -90,11 +90,30 @@ def has_creds(cfg):
 
 
 # ---------------------------------------------------------------- api
+def _rate_headers(headers):
+    """Extrai headers de rate limit (padrão PDS/Bluesky) para o tick respeitar."""
+    out = {}
+    if not headers:
+        return out
+    for h in ("ratelimit-limit", "ratelimit-remaining", "ratelimit-reset",
+              "x-ratelimit-remaining", "x-ratelimit-reset"):
+        try:
+            v = headers.get(h)
+            if v is not None:
+                out[h] = v
+        except Exception:
+            pass
+    return out
+
+
 class BskyClient:
     def __init__(self, cfg):
         self.cfg = cfg
         self.jwt = None
         self.did = None
+        self.last_rate_headers = {}
+        self.auth_error = False   # 401: sessão inválida
+        self.blocked = False      # 403: possível bloqueio/suspensão da conta
 
     def _req(self, path, payload=None, method=None):
         url = API + path
@@ -105,12 +124,19 @@ class BskyClient:
         if payload is not None:
             data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        self.last_rate_headers = {}
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 raw = resp.read().decode("utf-8")
+                self.last_rate_headers = _rate_headers(resp.headers)
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", "ignore")
+            self.last_rate_headers = _rate_headers(e.headers)
+            if e.code == 401:
+                self.auth_error = True
+            elif e.code == 403:
+                self.blocked = True
             raise RuntimeError(f"HTTP {e.code}: {body}")
         except Exception as e:
             raise RuntimeError(f"erro de rede: {e}")
