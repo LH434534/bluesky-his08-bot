@@ -1,0 +1,27 @@
+name: healthcheck
+
+on:
+  schedule:
+    # a cada 2h; o workflow principal não precisa de cron próprio (triggado pelo daemon local)
+    - cron: "0 */2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: healthcheck
+  cancel-in-progress: false
+
+jobs:
+  vigilante:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Health check + auto-reanimacao
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BSKY_WORKFLOW_ID: "373662044"
+        run: python3 healthcheck.py
