@@ -18,10 +18,19 @@ ANTI-BAN / HUMANIZAÇÃO (o objetivo é NUNCA parecer robô):
   - nunca curtir/responder o próprio post, posts repetidos, autores repetidos,
     posts antigos (>7 dias), texto suspeito de spam
   - anti-repetição de replies/posts (regenera até fugir do histórico)
-  - backoff: ao ver erro de rate limit (429/5xx), para o tick na hora
+  - backoff: ao ver erro de rate limit (429/4xx/5xx), para o tick na hora
+
+ROBUSTEZ (correções de auditoria):
+  - heartbeat gravado logo após o login (dead-man's switch p/ healthcheck)
+  - estado salvo via atexit/sys.excepthook (crash não perde contadores/dedupe)
+  - load_state com fallback para cache local e abort se repo indisponível
+  - save_state com retry + merge em 409 (evita corrupção em corrida)
+  - exit codes: 0 ok/ausente | 2 rate-limit/estado indisponível | 1 erro real
+  - posts truncados defensivamente em 295 e dedupe por chave normalizada
 
 Env de IA (opcionais): G4F=1 (grátis) | OPENAI/ANTHROPIC/GEMINI keys | AI_API_KEY...
 """
+import atexit
 import base64
 import hashlib
 import json
@@ -38,6 +47,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 import bluesky_agent as ba
 import ai_engine as aie
+import bot_utils
 
 cfg = ba.load_config()
 if not ba.has_creds(cfg):
@@ -69,6 +79,9 @@ REPO = os.environ.get("GITHUB_REPOSITORY", "")
 GH_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 STATE_PATH = os.path.join(BASE, "state.json")
 
+# Exit code final: 0 ok/ausente, 2 rate-limit/estado indisponível, 1 erro real
+FINAL_EXIT = 0
+
 
 def gh_api(method, path, payload=None):
     url = "https://api.github.com" + path
@@ -76,6 +89,7 @@ def gh_api(method, path, payload=None):
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Authorization", "Bearer " + GH_TOKEN)
     req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("User-Agent", "marvis-bot-tick")
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             raw = r.read().decode()
@@ -83,44 +97,62 @@ def gh_api(method, path, payload=None):
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "ignore")
         return e.code, (json.loads(body) if body else {})
+    except Exception as e:
+        print("[gh] erro de rede:", e)
+        return 0, {}
+
+
+_STATE_DEFAULTS = {
+    "date": "", "likes": 0, "replies": 0, "posts": 0, "follows": 0,
+    "likes_hour": 0, "hour_key": "", "authors_today": [],
+    "seen_uris": [], "reply_history": [], "post_history": [],
+    "bio_date": "", "avatar_date": "", "sched_done": {}, "last_heartbeat": "",
+}
 
 
 def load_state():
-    st = {"date": "", "likes": 0, "replies": 0, "posts": 0, "follows": 0,
-          "likes_hour": 0, "hour_key": "", "authors_today": [],
-          "seen_uris": [], "reply_history": [], "post_history": [],
-          "bio_date": "", "avatar_date": ""}
-    if not (REPO and GH_TOKEN):
-        return st
-    code, resp = gh_api("GET", f"/repos/{REPO}/contents/state.json")
-    if code != 200:
-        return st
-    try:
-        raw = base64.b64decode((resp.get("content") or "").replace("\n", ""))
-        loaded = json.loads(raw)
-        for k in st:
-            if k in loaded:
-                st[k] = loaded[k]
-    except Exception as e:
-        print("[state] falha ao decodificar:", e)
-    return st
-
-
-def save_state():
-    if not (REPO and GH_TOKEN):
-        return
-    try:
-        with open(STATE_PATH, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False)
-        code, existing = gh_api("GET", f"/repos/{REPO}/contents/state.json")
-        payload = {"message": "state update", "content": base64.b64encode(
-            json.dumps(state, ensure_ascii=False).encode()).decode()}
+    """Carrega estado do repo; fallback para cache local; aborta se nada disponível."""
+    st = dict(_STATE_DEFAULTS)
+    merged = False
+    # 1) tentar repo (fonte da verdade)
+    if REPO and GH_TOKEN:
+        code, resp = gh_api("GET", f"/repos/{REPO}/contents/state.json")
         if code == 200:
-            payload["sha"] = existing.get("sha")
-        gh_api("PUT", f"/repos/{REPO}/contents/state.json", payload)
-        print("[state] salvo e sincronizado")
-    except Exception as e:
-        print("[state] erro ao sincronizar:", e)
+            try:
+                raw = base64.b64decode((resp.get("content") or "").replace("\n", ""))
+                loaded = json.loads(raw)
+                for k in st:
+                    if k in loaded:
+                        st[k] = loaded[k]
+                merged = True
+                # grava cache local para fallback em falhas futuras
+                try:
+                    with open(STATE_PATH, "w", encoding="utf-8") as f:
+                        json.dump(st, f, ensure_ascii=False)
+                except Exception as e:
+                    print("[state] erro ao gravar cache:", e)
+            except Exception as e:
+                print("[state] falha ao decodificar repo:", e)
+    # 2) fallback: cache local da última execução
+    if not merged:
+        try:
+            if os.path.exists(STATE_PATH):
+                with open(STATE_PATH, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                for k in st:
+                    if k in cached:
+                        st[k] = cached[k]
+                print("[state] repo indisponível — usando cache local (execução anterior)")
+                merged = True
+        except Exception as e:
+            print("[state] falha ao ler cache local:", e)
+    # 3) sem estado nenhum e sem repo -> não agir (evita corromper o estado real)
+    if not merged:
+        print("[state] sem estado (repo e cache indisponíveis) — abortando tick")
+        global FINAL_EXIT
+        FINAL_EXIT = 2
+        sys.exit(2)
+    return st
 
 
 state = load_state()
@@ -140,6 +172,7 @@ def reset_if_new_day():
         state["authors_today"] = []
         state["likes_hour"] = 0
         state["hour_key"] = ""
+        state["sched_done"] = {}
 
 
 def hour_key():
@@ -158,6 +191,56 @@ def bump(key):
 def budget_ok(key, limit):
     reset_if_new_day()
     return state.get(key, 0) < limit
+
+
+def save_state():
+    """Persiste estado: cache local SEMPRE; repo com retry + merge em 409."""
+    if not (REPO and GH_TOKEN):
+        return
+    try:
+        with open(STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False)
+    except Exception as e:
+        print("[state] erro ao gravar cache local:", e)
+    content = base64.b64encode(json.dumps(state, ensure_ascii=False).encode()).decode()
+    for attempt in range(3):
+        try:
+            code, existing = gh_api("GET", f"/repos/{REPO}/contents/state.json")
+            if code != 200:
+                print(f"[state] GET remoto falhou ({code}) — mantém apenas cache local")
+                return
+            payload = {
+                "message": "state update",
+                "content": content,
+                "sha": existing.get("sha"),
+            }
+            put_code, put_resp = gh_api("PUT", f"/repos/{REPO}/contents/state.json", payload)
+            if put_code in (200, 201):
+                print("[state] salvo e sincronizado")
+                return
+            if put_code == 409:
+                # corrida com outra execução: re-lê e tenta de novo (local vence)
+                print(f"[state] conflito 409 (tentativa {attempt + 1}) — re-sincronizando")
+                continue
+            print(f"[state] PUT falhou: {put_code} {put_resp}")
+            return
+        except Exception as e:
+            print("[state] erro ao sincronizar:", e)
+            return
+    print("[state] falha persistente ao sincronizar — mantém cache local")
+
+
+# garante persistência mesmo em crash/exit (kill -9 não tem como cobrir)
+def _log_crash_and_exit(exc_type, exc_value, tb):
+    print(f"[crash] exceção não capturada: {exc_type.__name__}: {exc_value}")
+    import traceback
+    traceback.print_exception(exc_type, exc_value, tb)
+    save_state()
+    sys.__excepthook__(exc_type, exc_value, tb)
+
+
+sys.excepthook = _log_crash_and_exit
+atexit.register(save_state)
 
 
 # ------------------------------------------------------------ helpers anti-ban
@@ -204,18 +287,7 @@ SPAM_RE = re.compile(r"\b(dm|direct message|free\s*follow|follow\s*back|telegram
 
 
 def is_spamish(info):
-    t = (info["text"] or "").strip()
-    if len(t) < 5:
-        return True
-    if len(t) > 500:
-        return True
-    if t.count("http") > 2:
-        return True
-    if t.isupper() and len(t) > 40:
-        return True
-    if SPAM_RE.search(t):
-        return True
-    return False
+    return bot_utils.looks_spammy(info["text"])
 
 
 def can_engage(info):
@@ -263,6 +335,11 @@ if test_only:
         print("[teste] erro:", e)
     print("[i] tick concluído (modo teste).")
     sys.exit(0)
+
+
+# ------------------------------------------------------------ 0.5) heartbeat (dead-man's switch)
+state["last_heartbeat"] = datetime.now(timezone.utc).isoformat()
+save_state()
 
 
 # ------------------------------------------------------------ 1) contexto
@@ -324,7 +401,7 @@ human_awake = force_post or force_bio or force_avatar or random.random() < act_p
 if not human_awake:
     print("[humano] este tick o dono não mexeu no perfil (ausente). nada feito.")
     print("[i] tick concluído.")
-    sys.exit(0)
+    sys.exit(FINAL_EXIT)
 if is_night:
     print("[humano] horário noturno — modo repouso (sem interação social)")
 else:
@@ -342,10 +419,12 @@ rate_limited = False
 
 
 def rate_stop(exc):
-    global rate_limited
+    """Marca rate limit; tick para e sai com exit 2 (não re-disparar imediato)."""
+    global rate_limited, FINAL_EXIT
     msg = str(exc)
-    if "429" in msg or "500" in msg or "502" in msg or "503" in msg or "RateLimit" in msg:
+    if any(t in msg for t in ("429", "403", "408", "420", "500", "502", "503", "RateLimit", "enhance your calm")):
         rate_limited = True
+        FINAL_EXIT = 2
         print("  [anti-ban] rate limit detectado — parando ações deste tick")
         return True
     return False
@@ -384,7 +463,7 @@ def do_reply(info, text=None):
     if not text:
         for _ in range(4):
             try:
-                text = ai.generate_reply(info["text"])
+                text = ai.generate_reply(info["text"], history=state["reply_history"])
             except Exception as e:
                 print("  [erro ia]", e)
                 text = ""
@@ -456,7 +535,9 @@ if not is_night and not rate_limited and follow_prob > 0 and random.random() < f
 def safe_post(texto, tag):
     if not texto:
         return
-    if texto in state["post_history"]:
+    # corte defensivo (limite do Bluesky é 300) + dedupe por chave normalizada
+    texto = bot_utils.fit_length(texto, 295)
+    if bot_utils.similar_to_history(texto, state["post_history"]):
         print(f"  [humano] post repetido, descartado ({tag})")
         return
     if not budget_ok("posts", asp.get("max_posts_per_day", 10)):
@@ -478,7 +559,7 @@ if not rate_limited:
         texto = os.environ.get("BSKY_FORCE_TEXT", "").strip()
         if not texto and ia_ok:
             try:
-                texto = ai.generate_post()
+                texto = ai.generate_post(history=state["post_history"])
             except Exception as e:
                 print("  [erro ia]", e)
         if not texto:
@@ -491,17 +572,22 @@ if not rate_limited:
         if s.get("action") != "post":
             continue
         target = s["hour"] * 60 + s["minute"]
-        if abs(cur_min - target) > 5:
+        # janela de 15 min (cron */30 pode atrasar com g4f lento) + guarda anti-duplicata
+        if abs(cur_min - target) > 15:
+            continue
+        sched_key = f"{s['hour']:02d}:{s['minute']:02d}"
+        if state.get("sched_done", {}).get(sched_key) == today():
             continue
         texto = s["content"]
         if ia_ok:
             try:
-                texto = ai.generate_post()
+                texto = ai.generate_post(history=state["post_history"])
                 print("  [ia] post agendado gerado")
             except Exception as e:
                 print("  [erro ia]", e, "— usando texto fixo")
         sleep_human(*asp.get("pause_pre_post", [60, 180]))
         safe_post(texto, "agendado")
+        state.setdefault("sched_done", {})[sched_key] = today()
         break
 
     extra_prob = auto.get("extra_post_prob", 0.65)
@@ -509,7 +595,7 @@ if not rate_limited:
     if ia_ok and random.random() < extra_prob * night_mult:
         try:
             sleep_human(*asp.get("pause_pre_post", [60, 180]))
-            safe_post(ai.generate_post(), "extra")
+            safe_post(ai.generate_post(history=state["post_history"]), "extra")
         except Exception as e:
             print("  [erro post-extra]", e)
 
@@ -523,7 +609,7 @@ if not rate_limited:
         if tema:
             try:
                 sleep_human(*asp.get("pause_pre_post", [60, 180]))
-                safe_post(ai.generate_topic_post(tema), "trending")
+                safe_post(ai.generate_topic_post(tema, history=state["post_history"]), "trending")
             except Exception as e:
                 print("  [erro post-trending]", e)
 
@@ -550,9 +636,10 @@ if not rate_limited:
     bio_prob = auto.get("bio_daily_prob", 0.0)
     if force_bio or (ia_ok and not is_night and bio_prob > 0 and chance("bio", bio_prob) and state.get("bio_date") != today()):
         try:
-            bio = ai.generate_bio()
+            bio = ai.generate_bio(history=[state.get("last_bio", "")])
             if bio and safe_update_profile(description=bio):
                 state["bio_date"] = today()
+                state["last_bio"] = bio
                 print(f"  [bio] atualizada: {bio}")
                 sleep_human(2, 6)
         except Exception as e:
@@ -568,9 +655,11 @@ if not rate_limited:
         for url in urls:
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                mime = "image/png"
+                img = b""
                 with urllib.request.urlopen(req, timeout=30) as r:
                     img = r.read()
-                mime = r.headers.get("Content-Type", "image/png").split(";")[0].strip() or "image/png"
+                    mime = r.headers.get("Content-Type", "image/png").split(";")[0].strip() or "image/png"
                 if not img:
                     continue
                 blob = client.upload_blob(img, mime)
@@ -589,5 +678,5 @@ if not rate_limited:
     except RuntimeError as e:
         print("  [erro get_profile-final]", e)
 
-save_state()
 print("[i] tick concluído.")
+sys.exit(FINAL_EXIT)
