@@ -13,6 +13,8 @@ Rode com:  python3 tests.py
 """
 import os
 import runpy
+import hashlib
+import json
 import sys
 import tempfile
 import unittest
@@ -401,6 +403,94 @@ class TestBotOps(unittest.TestCase):
         self.assertIn("modo_cauteloso", rep["actions"])
         self.assertIn("extra_post_prob", adj)
         self.assertLess(adj["extra_post_prob"], 0.8)
+
+
+class TestAntiBanExtremo(unittest.TestCase):
+    """Camada anti-ban ao extremo: modo proteção, rate headers e jitter."""
+
+    def test_rate_headers_extrai_campos(self):
+        import bluesky_agent as ba
+        fake = {"ratelimit-limit": "60", "ratelimit-remaining": "3",
+                "ratelimit-reset": "1700000000", "x-other": "x"}
+        out = ba._rate_headers(fake)
+        self.assertEqual(out["ratelimit-remaining"], "3")
+        self.assertIn("ratelimit-limit", out)
+        self.assertNotIn("x-other", out)
+        self.assertEqual(ba._rate_headers(None), {})
+
+    def test_403_marca_blocked_e_auth_error(self):
+        import bluesky_agent as ba
+        c = ba.BskyClient({"handle": "h", "app_password": "p"})
+        self.assertFalse(c.blocked)
+        self.assertFalse(c.auth_error)
+
+    def test_modo_protecao_bloqueia_escrita(self):
+        """Com blocked_until futuro no state, tick vira só leitura (sem like/post)."""
+        import datetime, runpy, sys, os
+        import unittest.mock as mock
+        HERE = os.path.dirname(os.path.abspath(__file__))
+        log = []
+        modules = {
+            "bluesky_agent": make_bsky_stub(log),
+            "ai_engine": make_ai_stub(),
+        }
+        state_file = os.path.join(HERE, "state.json")
+        future = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=3)).isoformat()
+        with open(state_file, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"date": "", "likes": 0, "replies": 0, "posts": 0, "follows": 0,
+                                "likes_hour": 0, "hour_key": "", "authors_today": [], "seen_uris": [],
+                                "reply_history": [], "post_history": [], "bio_date": "",
+                                "avatar_date": "", "sched_done": {}, "last_heartbeat": "",
+                                "blocked_until": future}))
+        env = {
+            "BSKY_HANDLE": "test", "BSKY_APP_PASSWORD": "test",
+            "BSKY_FORCE_POST": "1", "BSKY_FORCE_TEXT": "post auditado #teste",
+            "G4F": "", "GITHUB_REPOSITORY": "", "GITHUB_TOKEN": "",
+        }
+        old_env = {k: os.environ.get(k) for k in env}
+        old_time = None
+        try:
+            for k, v in env.items():
+                os.environ[k] = v
+            import time, random
+            old_time = time.sleep
+            time.sleep = lambda s: None
+            old_random = (random.random, random.uniform)
+            random.random = lambda: 0.05
+            random.uniform = lambda a, b: 0.0
+            with mock.patch.dict(sys.modules, modules):
+                try:
+                    runpy.run_path(os.path.join(HERE, "tick.py"), run_name="__main__")
+                except SystemExit as e:
+                    code = e.code
+                else:
+                    code = 0
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            import time, random
+            time.sleep = old_time
+            random.random, random.uniform = old_random
+            if os.path.exists(state_file):
+                os.remove(state_file)
+
+        self.assertEqual(code, 0)
+        self.assertNotIn("post", [x[0] if isinstance(x, tuple) else x for x in log])
+        self.assertNotIn("like", [x[0] if isinstance(x, tuple) else x for x in log])
+        self.assertIn("login", log)
+
+    def test_jitter_deterministico_dentro_da_janela(self):
+        import bluesky_agent as ba
+        jit = 20
+        seeds = []
+        for i in range(50):
+            seed = int(hashlib.sha256(f"2026-10-04:sched:{i:02d}".encode()).hexdigest()[:8], 16)
+            seeds.append((seed % (2 * jit + 1)) - jit)
+        self.assertGreaterEqual(min(seeds), -jit)
+        self.assertLessEqual(max(seeds), jit)
 
 
 if __name__ == "__main__":
