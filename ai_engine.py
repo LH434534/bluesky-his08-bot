@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """ai_engine.py — camada de IA para o bot Bluesky (stdlib only).
+
 Providers suportados (via env):
   G4F=1               -> xtekky/gpt4free (GitHub): GRÁTIS, sem key, model=auto multi-provedores
   OLLAMA_FREE=1       -> OllamaFreeAPI (GitHub mfoud444/ollamafreeapi): GRÁTIS, sem key (instável)
@@ -8,12 +9,14 @@ Providers suportados (via env):
   ANTHROPIC_API_KEY  -> api.anthropic.com (messages, modelo claude-3-haiku por padrão)
   GEMINI_API_KEY     -> generativelanguage.googleapis.com (gemini-1.5-flash por padrão)
   AI_API_KEY + AI_API_URL + AI_MODEL -> qualquer endpoint compatível com OpenAI /v1/chat/completions
+      (ex.: Groq — AI_API_URL=https://api.groq.com/openai/v1/chat/completions e
+       AI_MODEL=llama-3.3-70b-versatile)
 
 Uso:
   ai = AIEngine()
   ai.available()          # True se alguma chave existe
-  ai.generate_post()      # gera um post (str)
-  ai.generate_reply(text) # gera resposta para um post (str)
+  ai.generate_post(history=...)      # gera um post (str) — "" se falhar na validação
+  ai.generate_reply(text, history=...) # gera resposta (str) — "" se falhar
 """
 import json
 import os
@@ -22,7 +25,9 @@ import unicodedata
 import urllib.request
 import urllib.error
 
-MAX_TRIES = 2
+import bot_utils
+
+MAX_TRIES = 3
 
 # Política oficial de automação do Bluesky (Developer Guidelines + Community Guidelines 10/2025)
 # Injetada em TODOS os geradores para a IA nunca parecer robô nem violar as regras da plataforma.
@@ -49,7 +54,8 @@ PERSONA_HUMANO = (
     "4) Emoção real de mlk de 18: animação, tédio, empolgação com música/jogo/futebol, reclamação leve da vida, "
     "comentário sobre o dia, zoeira com amigos. "
     "5) NUNCA: pareça motivacional genérico, nunca use markdown, nunca escreva como influencer de marketing, "
-    "nunca termine com 'curtam' ou 'sigam'. ""6) HASHTAGS OBRIGATÓRIAS (só em posts do seu feed, NUNCA em replies/respostas): em todo post novo, "
+    "nunca termine com 'curtam' ou 'sigam'. "
+    "6) HASHTAGS OBRIGATÓRIAS (só em posts do seu feed, NUNCA em replies/respostas): em todo post novo, "
     "SEMPRE feche o texto com 2 a 3 hashtags relevantes ao assunto (mín 2, máx 3, minúsculas, sem espaços, "
     "ex: #música #futebol #vibe). As hashtags contam como parte normal do post, não são opcionais e devem "
     "ser as últimas palavras do texto. "
@@ -62,6 +68,11 @@ def persona_system(base):
     """Injeta a persona humana em qualquer system prompt."""
     return PERSONA_HUMANO + " " + base
 
+
+# Padrões estruturais que nunca devem aparecer no texto gerado
+_MARKDOWN_RE = re.compile(r"(\*\*|__|##|```|`|\[[^\]]+\]\([^)]+\))")
+_CALL_ACTION_RE = re.compile(r"\b(curtam|sigam|segue aí|follow back|me segue|da like|da follow)\b", re.I)
+_ALL_CAPS_RE = re.compile(r"[A-ZÀ-Ý]{25,}")
 
 
 class AIEngine:
@@ -148,6 +159,28 @@ class AIEngine:
         max_body = limit - len(joined_tags)
         body = text if len(text) <= max_body else (text[:max_body].rsplit(" ", 1)[0].rstrip() if " " in text[:max_body] else text[:max_body])
         return f"{body}{joined_tags}".strip()[:limit]
+
+    @staticmethod
+    def _strip_hashtags(text):
+        """Remove hashtags de replies (nunca deve haver hashtag em resposta)."""
+        return re.sub(r"\s*#[A-Za-zÀ-ÿ0-9_]+\s*", " ", (text or "")).strip()
+
+    # ------------------------------------------------------------ validação
+    def _validate(self, text, limit, history=()):
+        """Valida texto gerado. Retorna True se pode ser usado."""
+        if not text or not text.strip():
+            return False
+        if len(text) > limit:
+            return False
+        if _MARKDOWN_RE.search(text):
+            return False
+        if _CALL_ACTION_RE.search(text):
+            return False
+        if _ALL_CAPS_RE.search(text):
+            return False
+        if bot_utils.similar_to_history(text, history, 40):
+            return False
+        return True
 
     # ------------------------------------------------------------ completions
     def _complete(self, system, user, temperature=0.9):
@@ -252,9 +285,9 @@ class AIEngine:
                             {"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
         return r["choices"][0]["message"]["content"]
 
-    # ------------------------------------------------------------ geradores
-    def generate_post(self):
-        """Gera um post curto, natural, estilo influenciador criativo."""
+    # ------------------------------------------------------------ geradores (validados)
+    def generate_post(self, history=()):
+        """Gera um post curto, natural, estilo influenciador criativo. "" se inválido."""
         sys = persona_system(
             "Escreva um post de até 250 caracteres (já contando as hashtags), SEMPRE COMPLETO até o fim: "
             "não pare no meio, não corte a frase, escreva o texto inteiro. "
@@ -262,30 +295,60 @@ class AIEngine:
             "SEMPRE feche com 2 a 3 hashtags relevantes (mín 2, máx 3) pra alcançar mais gente."
         )
         user = "O que você vai postar agora? Escreve como você fala mesmo, do jeito que digitaria no celular, e termina com as hashtags."
-        return self._ensure_hashtags(self._clean(self._complete(sys, user)))
+        for _ in range(MAX_TRIES):
+            try:
+                raw = self._complete(sys, user)
+            except Exception as e:
+                print("  [ia] falha:", type(e).__name__, str(e)[:120])
+                raw = None
+            text = self._ensure_hashtags(self._clean(raw or ""))
+            if self._validate(text, 295, history):
+                return text
+        print("  [ia] post rejeitado após", MAX_TRIES, "tentativas — não publicar")
+        return ""
 
-    def generate_reply(self, original):
-        """Gera resposta curta e contextual para um post específico."""
+    def generate_reply(self, original, history=()):
+        """Gera resposta curta e contextual. "" se inválido (tick usa template)."""
         sys = persona_system(
             "Responda com 1 frase curta (máx 120 caracteres), do jeito que um mlk de 18 responde um amigo "
             "ou alguém que ele nem conhece no feed: natural, sincero, às vezes engraçado, às vezes só concordando. "
-            "Nunca pareça resposta pronta de atendente."
+            "Nunca pareça resposta pronta de atendente. NUNCA use hashtags em respostas."
         )
         user = f"O post é: \"{original[:200]}\"\nEscreva sua resposta:"
-        return self._clean(self._complete(sys, user, temperature=0.8))
+        for _ in range(MAX_TRIES):
+            try:
+                raw = self._complete(sys, user, temperature=0.8)
+            except Exception as e:
+                print("  [ia] falha:", type(e).__name__, str(e)[:120])
+                raw = None
+            text = self._strip_hashtags(self._clean(raw or ""))
+            if self._validate(text, 120, history):
+                return text
+        print("  [ia] reply rejeitado após", MAX_TRIES, "tentativas — usando template fixo")
+        return ""
 
-    def generate_bio(self):
-        """Gera uma bio nova e autêntica para o perfil."""
+    def generate_bio(self, history=()):
+        """Gera uma bio nova e autêntica. "" se inválido."""
         sys = persona_system(
             BLUESKY_POLICY + " "
             "Escreva uma bio curta (máx 120 caracteres) pro seu perfil, do jeito que um mlk de 18 escreve. "
             "Sem hashtags, sem markdown, sem emojis demais (máx 2)."
         )
         user = "Escreva uma bio nova e original para meu perfil agora."
-        return self._clean(self._complete(sys, user, temperature=0.9))
+        for _ in range(MAX_TRIES):
+            try:
+                raw = self._complete(sys, user, temperature=0.9)
+            except Exception as e:
+                print("  [ia] falha:", type(e).__name__, str(e)[:120])
+                raw = None
+            text = self._clean(raw or "")
+            if self._validate(text, 120, history):
+                return text
+        print("  [ia] bio rejeitada após", MAX_TRIES, "tentativas — mantém atual")
+        return ""
 
-    def generate_topic_post(self, topic):
-        """Gera um post comentando sobre um assunto que está em alta."""
+    def generate_topic_post(self, topic, history=()):
+        """Gera post comentando um assunto em alta. "" se inválido."""
         sys = persona_system(
             "Comente o assunto em alta com um post de até 250 caracteres (contando as hashtags), do jeito que um mlk de 18 "
             "comenta uma trend ao vivo: opinião sincera, leve, sem parecer jornalista nem copy. "
@@ -297,7 +360,17 @@ class AIEngine:
             "Escreva 1 post seu comentando sobre isso, como se você estivesse "
             "acompanhando a trend ao vivo. Termina com as hashtags."
         )
-        return self._ensure_hashtags(self._clean(self._complete(sys, user, temperature=0.85)), topic)
+        for _ in range(MAX_TRIES):
+            try:
+                raw = self._complete(sys, user, temperature=0.85)
+            except Exception as e:
+                print("  [ia] falha:", type(e).__name__, str(e)[:120])
+                raw = None
+            text = self._ensure_hashtags(self._clean(raw or ""), topic)
+            if self._validate(text, 295, history):
+                return text
+        print("  [ia] post de trend rejeitado após", MAX_TRIES, "tentativas — não publicar")
+        return ""
 
 
 def main():
