@@ -1,93 +1,180 @@
 {
-  "handle": "his08.bsky.social",
-  "app_password": "",
-  "schedule": [
-    {"action": "post", "hour": 8,  "minute": 0,  "content": "Bom dia, família! ☕ Começando o dia por aqui."},
-    {"action": "post", "hour": 10, "minute": 30, "content": "Pausa pra pensar um pouco sobre a vida."},
-    {"action": "post", "hour": 13, "minute": 0,  "content": "Almoçou? Bora que o dia continua."},
-    {"action": "post", "hour": 15, "minute": 30, "content": "A tarde rendeu, e a criatividade tá solta."},
-    {"action": "post", "hour": 18, "minute": 0,  "content": "Boa noite! Amanhã tem mais."},
-    {"action": "post", "hour": 20, "minute": 30, "content": "Relaxando e curtindo um som. E vocês?"},
-    {"action": "post", "hour": 22, "minute": 45, "content": "Encerrando o dia. Até logo!"}
-  ],
-  "engagement": {
-    "enabled": true,
-    "follow_keywords": ["bluesky", "música", "arte", "criador", "meme", "cultura", "vida", "ideia", "trending", "brasil"],
-    "reply_templates": [
-      "Boa! 🔥",
-      "Concordo demais!",
-      "Muito bom isso.",
-      "Tô nessa também!",
-      "Isso aí! 👏",
-      "kkkk muito isso",
-      "simm, exatamente",
-      "caraca, não tinha pensado nisso",
-      "véi, que bom demais",
-      "manda mais conteúdo assim",
-      "curti demais essa visão",
-      "vdd, né",
-      "melhor take do dia",
-      "hahaha perfeito",
-      "pode crer",
-      "brabo demais 🔥",
-      "fala mais sobre isso",
-      "tava pensando nisso agora pouco",
-      "nossa, real",
-      "que daora"
-    ],
-    "cooldown_seconds": 25,
-    "jitter_seconds": 30
+ "handle": "his08.bsky.social",
+ "app_password": "",
+ "schedule": [
+  {
+   "action": "post",
+   "hour": 8,
+   "minute": 0,
+   "content": "Bom dia, família! ☕ Começando o dia por aqui."
   },
-  "autonomy": {
-    "trending_enabled": true,
-    "trending_feed": "at://did:plc:z72i7hdynmk6r22z27h6tv6ah/app.bsky.feed.generator/whats-hot",
-    "trending_post_prob": 0.9,
-    "extra_post_prob": 0.8,
-    "bio_daily_prob": 0.9,
-    "avatar_daily_prob": 0.35,
-    "follow_prob": 0.2,
-    "max_likes_per_tick": 6,
-    "max_replies_per_tick": 3
+  {
+   "action": "post",
+   "hour": 10,
+   "minute": 30,
+   "content": "Pausa pra pensar um pouco sobre a vida."
   },
-  "anti_spam": {
-    "max_likes_per_day": 100,
-    "max_replies_per_day": 36,
-    "max_posts_per_day": 20,
-    "max_follows_per_day": 5,
-    "max_likes_per_hour": 16,
-    "max_replies_per_hour": 7,
-    "max_authors_per_day": 12,
-    "max_reply_age_days": 7,
-    "pause_like": [3, 8],
-    "pause_reply": [4, 10],
-    "pause_block": [10, 25],
-    "pause_pre_post": [15, 40],
-    "night_start_min": 1410,
-    "night_end_min": 450,
-    "act_prob_day": 0.9,
-    "act_prob_night": 0.5,
-    "skip_like_prob": 0.25,
-    "max_state_seen": 3000
+  {
+   "action": "post",
+   "hour": 13,
+   "minute": 0,
+   "content": "Almoçou? Bora que o dia continua."
   },
-  "safety": {
-    "dry_run": false,
-    "max_post_length": 280,
-    "max_replies_per_thread": 1,
-    "pause_on_error": true
+  {
+   "action": "post",
+   "hour": 15,
+   "minute": 30,
+   "content": "A tarde rendeu, e a criatividade tá solta."
   },
-  "tuning": {
-    "enabled": true,
-    "error_window_min": 180,
-    "error_threshold": 6,
-    "step": 0.05,
-    "params": {
-      "extra_post_prob": {"min": 0.3, "max": 0.95},
-      "trending_post_prob": {"min": 0.4, "max": 0.95},
-      "bio_daily_prob": {"min": 0.5, "max": 0.95},
-      "avatar_daily_prob": {"min": 0.15, "max": 0.5},
-      "follow_prob": {"min": 0.05, "max": 0.25},
-      "act_prob_day": {"min": 0.7, "max": 0.95},
-      "act_prob_night": {"min": 0.2, "max": 0.7}
-    }
+  {
+   "action": "post",
+   "hour": 18,
+   "minute": 0,
+   "content": "Boa noite! Amanhã tem mais."
+  },
+  {
+   "action": "post",
+   "hour": 20,
+   "minute": 30,
+   "content": "Relaxando e curtindo um som. E vocês?"
+  },
+  {
+   "action": "post",
+   "hour": 22,
+   "minute": 45,
+   "content": "Encerrando o dia. Até logo!"
   }
+ ],
+ "engagement": {
+  "enabled": true,
+  "follow_keywords": [
+   "bluesky",
+   "música",
+   "arte",
+   "criador",
+   "meme",
+   "cultura",
+   "vida",
+   "ideia",
+   "trending",
+   "brasil"
+  ],
+  "reply_templates": [
+   "Boa! 🔥",
+   "Concordo demais!",
+   "Muito bom isso.",
+   "Tô nessa também!",
+   "Isso aí! 👏",
+   "kkkk muito isso",
+   "simm, exatamente",
+   "caraca, não tinha pensado nisso",
+   "véi, que bom demais",
+   "manda mais conteúdo assim",
+   "curti demais essa visão",
+   "vdd, né",
+   "melhor take do dia",
+   "hahaha perfeito",
+   "pode crer",
+   "brabo demais 🔥",
+   "fala mais sobre isso",
+   "tava pensando nisso agora pouco",
+   "nossa, real",
+   "que daora"
+  ],
+  "cooldown_seconds": 25,
+  "jitter_seconds": 30
+ },
+ "autonomy": {
+  "trending_enabled": true,
+  "trending_feed": "at://did:plc:z72i7hdynmk6r22z27h6tv6ah/app.bsky.feed.generator/whats-hot",
+  "trending_post_prob": 0.9,
+  "extra_post_prob": 0.8,
+  "bio_daily_prob": 0.9,
+  "avatar_daily_prob": 0.35,
+  "follow_prob": 0.2,
+  "max_likes_per_tick": 6,
+  "max_replies_per_tick": 3
+ },
+ "anti_spam": {
+  "max_likes_per_day": 100,
+  "max_replies_per_day": 36,
+  "max_posts_per_day": 20,
+  "max_follows_per_day": 5,
+  "max_likes_per_hour": 16,
+  "max_replies_per_hour": 7,
+  "max_authors_per_day": 12,
+  "max_reply_age_days": 7,
+  "pause_like": [
+   3,
+   8
+  ],
+  "pause_reply": [
+   4,
+   10
+  ],
+  "pause_block": [
+   10,
+   25
+  ],
+  "pause_pre_post": [
+   15,
+   40
+  ],
+  "night_start_min": 1410,
+  "night_end_min": 450,
+  "act_prob_day": 0.9,
+  "act_prob_night": 0.5,
+  "skip_like_prob": 0.25,
+  "max_state_seen": 3000,
+  "burst_max_per_10min": 5,
+  "burst_window_min": 10,
+  "min_social_gap_s": 45,
+  "author_cooldown_min": 90,
+  "block_403_min": 180,
+  "block_ratelimit_min": 30,
+  "schedule_jitter_min": 20,
+  "min_rate_remaining": 3
+ },
+ "safety": {
+  "dry_run": false,
+  "max_post_length": 280,
+  "max_replies_per_thread": 1,
+  "pause_on_error": true
+ },
+ "tuning": {
+  "enabled": true,
+  "error_window_min": 180,
+  "error_threshold": 6,
+  "step": 0.05,
+  "params": {
+   "extra_post_prob": {
+    "min": 0.3,
+    "max": 0.95
+   },
+   "trending_post_prob": {
+    "min": 0.4,
+    "max": 0.95
+   },
+   "bio_daily_prob": {
+    "min": 0.5,
+    "max": 0.95
+   },
+   "avatar_daily_prob": {
+    "min": 0.15,
+    "max": 0.5
+   },
+   "follow_prob": {
+    "min": 0.05,
+    "max": 0.25
+   },
+   "act_prob_day": {
+    "min": 0.7,
+    "max": 0.95
+   },
+   "act_prob_night": {
+    "min": 0.2,
+    "max": 0.7
+   }
+  }
+ }
 }
