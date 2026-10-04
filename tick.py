@@ -107,6 +107,7 @@ _STATE_DEFAULTS = {
     "likes_hour": 0, "hour_key": "", "authors_today": [],
     "seen_uris": [], "reply_history": [], "post_history": [],
     "bio_date": "", "avatar_date": "", "sched_done": {}, "last_heartbeat": "",
+    "last_run_id": "",
 }
 
 
@@ -121,9 +122,11 @@ def load_state():
             try:
                 raw = base64.b64decode((resp.get("content") or "").replace("\n", ""))
                 loaded = json.loads(raw)
-                for k in st:
-                    if k in loaded:
-                        st[k] = loaded[k]
+                # preserva chaves extras (metrics/cb/incidents/tuning) e preenche defaults
+                for k, v in loaded.items():
+                    st[k] = v
+                for k in _STATE_DEFAULTS:
+                    st.setdefault(k, _STATE_DEFAULTS[k])
                 merged = True
                 # grava cache local para fallback em falhas futuras
                 try:
@@ -139,9 +142,10 @@ def load_state():
             if os.path.exists(STATE_PATH):
                 with open(STATE_PATH, "r", encoding="utf-8") as f:
                     cached = json.load(f)
-                for k in st:
-                    if k in cached:
-                        st[k] = cached[k]
+                for k, v in cached.items():
+                    st[k] = v
+                for k in _STATE_DEFAULTS:
+                    st.setdefault(k, _STATE_DEFAULTS[k])
                 print("[state] repo indisponível — usando cache local (execução anterior)")
                 merged = True
         except Exception as e:
@@ -156,6 +160,37 @@ def load_state():
 
 
 state = load_state()
+
+# ------------------------------------------------ camada de auto-manutenção (bot_ops)
+import bot_ops as bops
+
+METRICS = bops.Metrics(state.get("metrics"))
+BSKY_CB = bops.CircuitBreaker(state.get("cb_bsky"), "bsky_api", failure_threshold=4, cooldown_sec=5400)
+IA_CB = bops.CircuitBreaker(state.get("cb_ia"), "ia", failure_threshold=3, cooldown_sec=7200)
+GH_CB = bops.CircuitBreaker(state.get("cb_gh"), "gh_state", failure_threshold=3, cooldown_sec=3600)
+INCIDENTS = bops.IncidentLog(state.get("incidents"))
+OPS_REPORT, OPS_ADJ = bops.run_self_check(
+    state, METRICS, {"bsky": BSKY_CB, "ia": IA_CB, "gh": GH_CB}, INCIDENTS, cfg)
+if OPS_ADJ:
+    # aplica ajustes controlados (somente chaves com limites declarados)
+    auto = dict(auto)
+    for k, v in OPS_ADJ.items():
+        if k in asp:
+            asp[k] = v
+        else:
+            auto[k] = v
+    bops.json_log("info", "ops.tuning_aplicado", ajustes=OPS_ADJ)
+if OPS_REPORT.get("cautious"):
+    print("[ops] MODO CAUTELOSO — atividade reduzida (erros recentes altos)")
+    bops.json_log("warn", "ops.cauteloso", sinais=OPS_REPORT.get("signals"))
+if OPS_REPORT.get("unstable"):
+    print("[ops] correções instáveis evitadas:", OPS_REPORT["unstable"])
+bsky_ok = BSKY_CB.allow()
+ia_use = ia_ok and IA_CB.allow()
+if not bsky_ok:
+    print("[ops] circuit breaker BLUESKY aberto — tick vira heartbeat-only")
+if not ia_use:
+    print("[ops] circuit breaker IA aberto — fallback fixo até cooldown")
 
 
 def today():
@@ -339,6 +374,8 @@ if test_only:
 
 # ------------------------------------------------------------ 0.5) heartbeat (dead-man's switch)
 state["last_heartbeat"] = datetime.now(timezone.utc).isoformat()
+state["last_run_id"] = f"{today()}-{os.getpid()}"
+METRICS.inc("ticks")
 save_state()
 
 
@@ -347,9 +384,12 @@ timeline_posts = []
 try:
     tl = client.timeline(limit=30)
     timeline_posts = [it for it in tl.get("feed", []) if it.get("post")]
+    BSKY_CB.record_success()
     print(f"[contexto] timeline lida: {len(timeline_posts)} posts")
 except RuntimeError as e:
     print("  [erro timeline]", e)
+    METRICS.error("bsky.timeline")
+    BSKY_CB.record_failure()
 
 trending_posts = []
 trending_topics = []
@@ -358,9 +398,12 @@ if auto.get("trending_enabled", True):
         hot = client.get_popular(limit=20)
         trending_posts = [it for it in hot.get("feed", []) if it.get("post")]
         if trending_posts:
+            BSKY_CB.record_success()
             print(f"[contexto] posts em alta lidos: {len(trending_posts)}")
     except RuntimeError as e:
         print("  [erro trending]", e)
+        METRICS.error("bsky.trending")
+        BSKY_CB.record_failure()
     if not trending_posts:
         try:
             tt = client.get_trending_topics(limit=10)
@@ -373,8 +416,10 @@ if auto.get("trending_enabled", True):
                     print(f"[contexto] posts do tópico em alta: {len(trending_posts)}")
                 except RuntimeError as e:
                     print("  [erro trending]", e)
+                    METRICS.error("bsky.trending")
         except RuntimeError as e:
             print("  [erro trending]", e)
+            METRICS.error("bsky.trending")
     if not trending_posts:
         for kw in ["música", "arte", "futebol", "cinema", "Brasil", "tecnologia"]:
             try:
@@ -386,6 +431,7 @@ if auto.get("trending_enabled", True):
                     break
             except RuntimeError as e:
                 print("  [erro trending]", e)
+                METRICS.error("bsky.trending")
 
 force_post = os.environ.get("BSKY_FORCE_POST", "").strip().lower() in ("1", "true", "yes", "sim")
 force_bio = os.environ.get("BSKY_FORCE_BIO", "").strip().lower() in ("1", "true", "yes", "sim")
@@ -425,6 +471,9 @@ def rate_stop(exc):
     if any(t in msg for t in ("429", "403", "408", "420", "500", "502", "503", "RateLimit", "enhance your calm")):
         rate_limited = True
         FINAL_EXIT = 2
+        METRICS.error("bsky.rate_limit")
+        INCIDENTS.add("bsky.rate_limit", context="tick", cause=msg[:150],
+                      action="parar_tick", outcome="ok")
         print("  [anti-ban] rate limit detectado — parando ações deste tick")
         return True
     return False
@@ -445,10 +494,14 @@ def do_like(info):
         client.like(info["uri"], info["cid"])
         mark_engaged(info, "like")
         likes_done += 1
+        METRICS.inc("likes_ok")
+        BSKY_CB.record_success()
         print(f"  [like] {info['handle']}: {info['text'][:45]}")
         sleep_human(*asp.get("pause_like", [8, 20]))
     except RuntimeError as e:
         print("  [erro like]", e)
+        METRICS.error("bsky.like")
+        BSKY_CB.record_failure()
         rate_stop(e)
 
 
@@ -464,8 +517,11 @@ def do_reply(info, text=None):
         for _ in range(4):
             try:
                 text = ai.generate_reply(info["text"], history=state["reply_history"])
+                IA_CB.record_success()
             except Exception as e:
                 print("  [erro ia]", e)
+                METRICS.error("ia.reply")
+                IA_CB.record_failure()
                 text = ""
             if text and text not in state["reply_history"]:
                 break
@@ -479,15 +535,19 @@ def do_reply(info, text=None):
         state["reply_history"].append(text)
         state["reply_history"] = state["reply_history"][-40:]
         replies_done += 1
+        METRICS.inc("replies_ok")
+        BSKY_CB.record_success()
         print(f"  [reply] {info['handle']}: {text}")
         sleep_human(*asp.get("pause_reply", [10, 25]))
     except RuntimeError as e:
         print("  [erro reply]", e)
+        METRICS.error("bsky.reply")
+        BSKY_CB.record_failure()
         rate_stop(e)
 
 
 # ------------------------------------------------------------ 2) engajamento (só de dia)
-if not is_night and not rate_limited:
+if not is_night and not rate_limited and bsky_ok:
     for item in timeline_posts:
         if likes_done >= max_likes_tick and replies_done >= max_replies_tick:
             break
@@ -501,7 +561,7 @@ if not is_night and not rate_limited:
                 do_reply(info)
     sleep_human(*asp.get("pause_block", [30, 90]))
 
-if not is_night and not rate_limited:
+if not is_night and not rate_limited and bsky_ok:
     for item in trending_posts:
         if likes_done >= max_likes_tick and replies_done >= max_replies_tick:
             break
@@ -515,7 +575,7 @@ if not is_night and not rate_limited:
 
 # follow ocasional (só de dia, raro)
 follow_prob = auto.get("follow_prob", 0.0)
-if not is_night and not rate_limited and follow_prob > 0 and random.random() < follow_prob:
+if not is_night and not rate_limited and bsky_ok and follow_prob > 0 and random.random() < follow_prob:
     if budget_ok("follows", asp.get("max_follows_per_day", 2)):
         candidate = next((post_info(it) for it in (trending_posts + timeline_posts)
                           if post_info(it).get("did") and post_info(it).get("did") != client.did
@@ -524,10 +584,14 @@ if not is_night and not rate_limited and follow_prob > 0 and random.random() < f
             try:
                 client.follow(candidate["did"])
                 bump("follows")
+                METRICS.inc("follows_ok")
+                BSKY_CB.record_success()
                 print(f"  [follow] @{candidate['handle']}")
                 sleep_human(5, 12)
             except RuntimeError as e:
                 print("  [erro follow]", e)
+                METRICS.error("bsky.follow")
+                BSKY_CB.record_failure()
                 rate_stop(e)
 
 
@@ -547,21 +611,28 @@ def safe_post(texto, tag):
         bump("posts")
         state["post_history"].append(texto)
         state["post_history"] = state["post_history"][-30:]
+        METRICS.inc("posts_ok")
+        BSKY_CB.record_success()
         print(f"  [post-{tag}] {texto}")
         sleep_human(*asp.get("pause_block", [30, 90]))
     except RuntimeError as e:
         print(f"  [erro post-{tag}]", e)
+        METRICS.error("bsky.post")
+        BSKY_CB.record_failure()
         rate_stop(e)
 
 
-if not rate_limited:
+if not rate_limited and bsky_ok:
     if force_post:
         texto = os.environ.get("BSKY_FORCE_TEXT", "").strip()
-        if not texto and ia_ok:
+        if not texto and ia_use:
             try:
                 texto = ai.generate_post(history=state["post_history"])
+                IA_CB.record_success()
             except Exception as e:
                 print("  [erro ia]", e)
+                METRICS.error("ia.post")
+                IA_CB.record_failure()
         if not texto:
             texto = "🔥 Primeiro post do bot no ar! Sigam @his08.bsky.social e fiquem ligados."
         sleep_human(*asp.get("pause_pre_post", [60, 180]))
@@ -579,12 +650,15 @@ if not rate_limited:
         if state.get("sched_done", {}).get(sched_key) == today():
             continue
         texto = s["content"]
-        if ia_ok:
+        if ia_use:
             try:
                 texto = ai.generate_post(history=state["post_history"])
+                IA_CB.record_success()
                 print("  [ia] post agendado gerado")
             except Exception as e:
                 print("  [erro ia]", e, "— usando texto fixo")
+                METRICS.error("ia.post")
+                IA_CB.record_failure()
         sleep_human(*asp.get("pause_pre_post", [60, 180]))
         safe_post(texto, "agendado")
         state.setdefault("sched_done", {})[sched_key] = today()
@@ -592,15 +666,18 @@ if not rate_limited:
 
     extra_prob = auto.get("extra_post_prob", 0.65)
     night_mult = 0.4 if is_night else 1.0
-    if ia_ok and random.random() < extra_prob * night_mult:
+    if ia_use and random.random() < extra_prob * night_mult:
         try:
             sleep_human(*asp.get("pause_pre_post", [60, 180]))
             safe_post(ai.generate_post(history=state["post_history"]), "extra")
+            IA_CB.record_success()
         except Exception as e:
             print("  [erro post-extra]", e)
+            METRICS.error("ia.post")
+            IA_CB.record_failure()
 
     trend_prob = auto.get("trending_post_prob", 0.35)
-    if not is_night and ia_ok and (trending_posts or trending_topics) and random.random() < trend_prob:
+    if not is_night and ia_use and (trending_posts or trending_topics) and random.random() < trend_prob:
         tema = None
         if trending_topics:
             tema = random.choice(trending_topics)
@@ -610,8 +687,11 @@ if not rate_limited:
             try:
                 sleep_human(*asp.get("pause_pre_post", [60, 180]))
                 safe_post(ai.generate_topic_post(tema, history=state["post_history"]), "trending")
+                IA_CB.record_success()
             except Exception as e:
                 print("  [erro post-trending]", e)
+                METRICS.error("ia.post")
+                IA_CB.record_failure()
 
 
 # ------------------------------------------------------------ 5) perfil: bio + avatar
@@ -632,18 +712,21 @@ def safe_update_profile(**kw):
         return False
 
 
-if not rate_limited:
+if not rate_limited and bsky_ok:
     bio_prob = auto.get("bio_daily_prob", 0.0)
-    if force_bio or (ia_ok and not is_night and bio_prob > 0 and chance("bio", bio_prob) and state.get("bio_date") != today()):
+    if force_bio or (ia_use and not is_night and bio_prob > 0 and chance("bio", bio_prob) and state.get("bio_date") != today()):
         try:
             bio = ai.generate_bio(history=[state.get("last_bio", "")])
             if bio and safe_update_profile(description=bio):
                 state["bio_date"] = today()
                 state["last_bio"] = bio
+                IA_CB.record_success()
                 print(f"  [bio] atualizada: {bio}")
                 sleep_human(2, 6)
         except Exception as e:
             print("  [erro bio]", e)
+            METRICS.error("ia.bio")
+            IA_CB.record_failure()
 
     avatar_prob = auto.get("avatar_daily_prob", 0.0)
     if force_avatar or (not is_night and avatar_prob > 0 and chance("avatar", avatar_prob) and state.get("avatar_date") != today()):
@@ -678,5 +761,17 @@ if not rate_limited:
     except RuntimeError as e:
         print("  [erro get_profile-final]", e)
 
+# persistência da camada de operações (observabilidade / breakers / incidents / tuning)
+state["metrics"] = METRICS.to_dict()
+state["cb_bsky"] = BSKY_CB.to_dict()
+state["cb_ia"] = IA_CB.to_dict()
+state["cb_gh"] = GH_CB.to_dict()
+state["incidents"] = INCIDENTS.to_dict()
+if OPS_ADJ:
+    th = state.setdefault("tuning_history", [])
+    th.append({"ts": bops.now_iso(),
+               "reason": "cauteloso" if OPS_REPORT.get("cautious") else "saudavel",
+               "ajustes": OPS_ADJ})
+    state["tuning_history"] = th[-30:]
 print("[i] tick concluído.")
 sys.exit(FINAL_EXIT)
