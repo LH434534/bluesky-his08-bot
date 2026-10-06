@@ -1,20 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""healthcheck.py — vigilância externa do bot (self-healing).
+"""healthcheck.py — vigilante AUTÔNOMO remoto (roda no GitHub Actions).
 
-Executado por healthcheck.yml (GitHub Actions) a cada 2h + manual.
-
-O que faz:
-  1. Lê state.json do repo (fonte da verdade).
-  2. Se last_heartbeat estiver ausente OU mais velho que 6h → o bot morreu:
-     re-dispatcha imediatamente o workflow principal (reanimação) e registra
-     incidente de disponibilidade.
-  3. Se heartbeat recente → registra "saudável" (métrica de disponibilidade).
-  4. Grava health_history.json (máx. 200) com merge em 409 (corrida segura),
-     formando o histórico de disponibilidade/recuperações.
-  5. Exit 0 sempre (job verde no Actions; o log é a fonte de observação).
+Diferente de um automático (que só segue rotina), este script DECIDE:
+  - último run do bot terminou em failure -> REANIMA com re-dispatch (cooldown anti-loop)
+  - nenhum run concluído nas últimas 3h -> REANIMA (mesmo se heartbeat local parecer vivo)
+  - heartbeat local morto (>6h) -> REANIMA
+  - tudo saudável -> apenas registra
+Histórico persistido em health_history.json (merge 409-tolerant).
 """
-import base64
 import json
 import os
 import sys
@@ -23,124 +17,151 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 
-REPO = os.environ.get("GITHUB_REPOSITORY", "")
-TOKEN = os.environ.get("GITHUB_TOKEN", "")
-BOT_WORKFLOW_ID = os.environ.get("BSKY_WORKFLOW_ID", "373662044")
-HEARTBEAT_MAX_AGE_S = int(os.environ.get("BSKY_HEARTBEAT_MAX_AGE_S", "21600"))  # 6h
-HISTORY_LIMIT = int(os.environ.get("BSKY_HEALTH_HISTORY_LIMIT", "200"))
+TOKEN = os.environ.get("GITHUB_TOKEN", "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")
+REPO = "LH434534/bluesky-his08-bot"
+WF_ID = "373662044"
+STATE_FILE = "state.json"
+HIST_FILE = "health_history.json"
+
+HEARTBEAT_STALE_S = 6 * 3600
+RUNS_STALE_S = 3 * 3600
+REANIM_COOLDOWN_S = 60 * 60
+
+TZ = time.strftime("%Z")
 
 
-def now_iso():
-    return datetime.now(timezone.utc).isoformat()
+def log(msg):
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')} {TZ}] {msg}", flush=True)
 
 
 def gh(method, path, payload=None):
-    url = "https://api.github.com" + path
+    url = f"https://api.github.com/repos/{REPO}/{path}"
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Authorization", "Bearer " + TOKEN)
+    req.add_header("Authorization", f"token {TOKEN}")
     req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("User-Agent", "marvis-bot-healthcheck")
+    req.add_header("User-Agent", "marvis-healthcheck-autonomo")
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:
             raw = r.read().decode()
             return r.status, (json.loads(raw) if raw else {})
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "ignore")
         return e.code, (json.loads(body) if body else {})
     except Exception as e:
-        print("[gh] erro de rede:", e)
-        return 0, {}
+        return 0, {"error": repr(e)}
 
 
-def read_state():
-    code, resp = gh("GET", f"/repos/{REPO}/contents/state.json")
-    if code != 200:
-        print(f"[health] state.json inacessível ({code}) — não é possível julgar")
-        return None
+def read_json(path):
     try:
-        raw = base64.b64decode((resp.get("content") or "").replace("\n", ""))
-        return json.loads(raw)
-    except Exception as e:
-        print("[health] state.json corrompido:", e)
-        return None
-
-
-def heartbeat_age(state):
-    hb = (state or {}).get("last_heartbeat") or ""
-    if not hb:
-        return None
-    try:
-        dt = datetime.fromisoformat(hb.replace("Z", "+00:00"))
-        return time.time() - dt.timestamp()
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
-        return None
+        return {}
 
 
-def dispatch_bot():
-    code, resp = gh("POST", f"/repos/{REPO}/actions/workflows/{BOT_WORKFLOW_ID}/dispatches",
-                    {"ref": "main"})
-    if code in (202, 204):
-        print("[health] workflow do bot RE-DISPATCHADO (reanimação)")
-        return True
-    print(f"[health] falha ao re-dispatchar: {code} {resp}")
-    return False
+def write_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def append_history(rec):
-    """Merge de health_history.json com retry em 409 (evita corrida de execuções)."""
-    content = None
-    for attempt in range(3):
-        code, existing = gh("GET", f"/repos/{REPO}/contents/health_history.json")
-        history = []
-        if code == 200:
-            try:
-                raw = base64.b64decode((existing.get("content") or "").replace("\n", ""))
-                history = json.loads(raw)
-            except Exception:
-                history = []
-        history.append(rec)
-        history = history[-HISTORY_LIMIT:]
-        content = base64.b64encode(json.dumps(history, ensure_ascii=False).encode()).decode()
-        payload = {"message": "health history", "content": content,
-                   "sha": existing.get("sha") if code == 200 else None}
-        put_code, put_resp = gh("PUT", f"/repos/{REPO}/contents/health_history.json", payload)
-        if put_code in (200, 201):
-            print(f"[health] health_history.json atualizado ({len(history)} registros)")
-            return True
-        if put_code == 409 and attempt < 2:
-            print(f"[health] 409 (tentativa {attempt + 1}) — re-lendo")
-            continue
-        print(f"[health] falha ao gravar histórico: {put_code}")
-        return False
+def dispatch():
+    code, resp = gh("POST", f"actions/workflows/{WF_ID}/dispatches", {"ref": "main"})
+    return code == 204
+
+
+def append_history(entry):
+    hist = read_json(HIST_FILE)
+    if not isinstance(hist, list):
+        hist = []
+    hist.append(entry)
+    hist = hist[-200:]
+    try:
+        write_json(HIST_FILE, hist)
+    except Exception as e:
+        log(f"erro persistindo histórico: {e}")
 
 
 def main():
-    if not (REPO and TOKEN):
-        print("[health] sem GITHUB_REPOSITORY/GITHUB_TOKEN — abortando")
-        sys.exit(1)
-    state = read_state()
-    age = heartbeat_age(state)
-    rec = {"ts": now_iso(), "heartbeat_age_s": age,
-           "last_run_id": (state or {}).get("last_run_id", ""),
-           "status": "?", "action": "none"}
-    if age is None:
-        rec["status"] = "sem_heartbeat"
-        print("[health] sem heartbeat no estado — bot provavelmente nunca rodou ou morreu")
-        ok = dispatch_bot()
-        rec["action"] = "reanimar" if ok else "reanimar_falhou"
-    elif age > HEARTBEAT_MAX_AGE_S:
-        rec["status"] = "morto"
-        print(f"[health] heartbeat com {int(age)}s (> {HEARTBEAT_MAX_AGE_S}s) — bot parado")
-        ok = dispatch_bot()
-        rec["action"] = "reanimar" if ok else "reanimar_falhou"
+    log("vigilante autônomo iniciado")
+    hist = read_json(HIST_FILE)
+    if not isinstance(hist, list):
+        hist = []
+    last_reanim = 0.0
+    for e in reversed(hist):
+        if e.get("action") == "reanimar" and e.get("ts"):
+            try:
+                last_reanim = datetime.fromisoformat(e["ts"]).timestamp()
+                break
+            except Exception:
+                pass
+    now = time.time()
+
+    # 1) estado do último run do bot (fonte primária de verdade)
+    state = {}
+    reason = None
+    code, resp = gh("GET", "actions/runs?per_page=5")
+    if code == 200:
+        runs = resp.get("workflow_runs", [])
+        if runs:
+            newest = runs[0]
+            status, concl = newest["status"], newest.get("conclusion")
+            try:
+                created = datetime.fromisoformat(newest["created_at"].replace("Z", "+00:00")).timestamp()
+            except Exception:
+                created = now
+            age = now - created
+            state = {"run_id": newest["id"], "status": status,
+                     "conclusion": concl, "run_age_s": int(age)}
+            if status == "completed" and concl == "failure":
+                reason = f"ultimo_run_failure({newest['id']},ha_{int(age)}s)"
+            elif age > RUNS_STALE_S:
+                reason = f"sem_run_recente({int(age)}s)"
+            elif status in ("in_progress", "queued"):
+                reason = "run_em_andamento"
+            else:
+                reason = f"saudavel(run_{newest['id']},ha_{int(age)}s)"
+        else:
+            reason = "sem_runs"
     else:
-        rec["status"] = "saudavel"
-        print(f"[health] heartbeat com {int(age)}s — bot saudável")
-    append_history(rec)
-    print("[health] healthcheck concluído.")
-    sys.exit(0)
+        state = {"api_error": code}
+        reason = f"api_runs_{code}"
+
+    # 2) heartbeat local (informação auxiliar)
+    local = read_json(STATE_FILE)
+    hb_ts = local.get("last_heartbeat") or local.get("ts")
+    hb_stale = False
+    if hb_ts:
+        try:
+            hb_time = datetime.fromisoformat(str(hb_ts).replace("Z", "+00:00")).timestamp()
+            hb_stale = (now - hb_time) > HEARTBEAT_STALE_S
+        except Exception:
+            pass
+
+    # 3) decisão autônoma
+    action = "monitorar"
+    cooldown_left = int(REANIM_COOLDOWN_S - (now - last_reanim))
+    if (reason and reason.startswith(("ultimo_run_failure", "sem_run_recente", "sem_runs"))) or hb_stale:
+        if cooldown_left > 0:
+            action = "cooldown"
+            log(f"[decisão] {reason} quer reanimar, mas cooldown {cooldown_left}s restante")
+        else:
+            action = "reanimar"
+            log(f"[decisão] REANIMAR — {reason}, heartbeat_local_stale={hb_stale}")
+            ok = dispatch()
+            log(f"[reanimação] dispatch={'OK' if ok else 'FALHOU'}")
+            append_history({"ts": datetime.now(timezone.utc).isoformat(),
+                            "action": "reanimar", "ok": ok, "motivo": reason})
+    else:
+        log(f"[decisão] {reason} — nada a fazer")
+    append_history({"ts": datetime.now(timezone.utc).isoformat(),
+                    "action": action, "motivo": reason, "state": state,
+                    "heartbeat_stale": hb_stale})
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        log(f"[erro fatal] {e!r}")
+        sys.exit(1)
