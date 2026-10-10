@@ -210,6 +210,25 @@ class BskyClient:
         import urllib.parse
         return self._req(f"/app.bsky.feed.searchPosts?q={urllib.parse.quote(q)}&limit={limit}")
 
+    # ---- resposta a comentários nos próprios posts (adicionado 2026-10-10)
+    # listNotifications devolve replies/mentions/likes/follows/reposts; reason=='reply'
+    # significa "alguém comentou num post seu (ou respondeu um comentário seu)".
+
+    def list_notifications(self, limit=50):
+        """Notificações recentes da conta (comentários, menções, likes, follows...)."""
+        return self._req(f"/app.bsky.notification.listNotifications?limit={limit}")
+
+    def get_thread(self, uri, depth=0):
+        """Thread de um post. Usado para confirmar que a raiz do fio é post do bot
+        (só responder comentário em post próprio, não em fio de terceiro)."""
+        import urllib.parse
+        return self._req(f"/app.bsky.feed.getPostThread?uri={urllib.parse.quote(uri, safe='')}&depth={depth}")
+
+    def update_seen(self):
+        """Marca todas as notificações como lidas (só estado de UI; não afeta dedupe)."""
+        return self._req("/app.bsky.notification.updateSeen",
+                         {"seenAt": datetime_now_iso()}, method="POST")
+
     def follow(self, did):
         """Segue um usuário."""
         rec = {

@@ -181,6 +181,15 @@ def make_bsky_stub(log):
         def search_posts(self, q, limit=25):
             return {"posts": []}
 
+        def list_notifications(self, limit=50):
+            return {"notifications": []}
+
+        def get_thread(self, uri, depth=0):
+            return {"thread": {"post": {"author": {"did": self.did}}}}
+
+        def update_seen(self):
+            return {}
+
         def like(self, uri, cid):
             log.append(("like", uri))
             return {"uri": uri}

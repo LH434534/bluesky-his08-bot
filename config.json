@@ -84,6 +84,16 @@
   "cooldown_seconds": 25,
   "jitter_seconds": 30
  },
+ "comment_replies": {
+  "enabled": true,
+  "include_mentions": true,
+  "max_per_tick": 2,
+  "max_per_day": 10,
+  "max_per_hour": 4,
+  "reply_prob": 0.85,
+  "max_thread_replies": 1,
+  "notify_limit": 50
+ },
  "autonomy": {
   "trending_enabled": true,
   "trending_feed": "at://did:plc:z72i7hdynmk6r22z27h6tv6ah/app.bsky.feed.generator/whats-hot",

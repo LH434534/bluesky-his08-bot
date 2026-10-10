@@ -73,6 +73,11 @@ else:
 auto = cfg.get("autonomy", {})
 engage = cfg.get("engagement", {})
 asp = cfg.get("anti_spam", {})
+comment_cfg = cfg.get("comment_replies", {})
+max_comment_tick = comment_cfg.get("max_per_tick", 2)
+max_comment_day = comment_cfg.get("max_per_day", 10)
+max_comment_hour = comment_cfg.get("max_per_hour", 4)
+max_thread_replies = comment_cfg.get("max_thread_replies", 1)
 
 # ------------------------------------------------------------ estado persistente
 REPO = os.environ.get("GITHUB_REPOSITORY", "")
@@ -108,6 +113,9 @@ _STATE_DEFAULTS = {
     "seen_uris": [], "reply_history": [], "post_history": [],
     "bio_date": "", "avatar_date": "", "sched_done": {}, "last_heartbeat": "",
     "last_run_id": "",
+    # resposta a comentários nos próprios posts
+    "replies_comment": 0, "replies_comment_hour": 0, "hour_key_comment": "",
+    "thread_replied": {},
     # camada anti-ban extrema (persistida entre ticks/ciclos)
     "action_log": [], "last_social_ts": "", "blocked_until": "",
     "author_last_ts": {},
@@ -211,6 +219,9 @@ def reset_if_new_day():
         state["likes_hour"] = 0
         state["hour_key"] = ""
         state["sched_done"] = {}
+        state["replies_comment"] = 0
+        state["replies_comment_hour"] = 0
+        state["hour_key_comment"] = ""
 
 
 def hour_key():
@@ -431,6 +442,23 @@ def mark_engaged(info, action):
         state["authors_today"] = state["authors_today"][-max_auth:]
     bump("likes" if action == "like" else "replies")
     record_action()
+
+
+# ------------------------------------------------------------ 0) modo diag (só leitura)
+diag_notif = os.environ.get("BSKY_DIAG_NOTIF", "").strip().lower() in ("1", "true", "yes", "sim")
+if diag_notif:
+    try:
+        n = client.list_notifications(limit=50)
+        notifs = n.get("notifications", [])
+        print(f"[diag] total notificações: {len(notifs)}")
+        for it in notifs[:10]:
+            rec = it.get("record", {}) or {}
+            print(f"  - {it.get('reason')} | @{it.get('author', {}).get('handle', '?')} | "
+                  f"root={rec.get('reply', {}).get('root', {}).get('uri', '-')} | {rec.get('text', '')[:40]!r}")
+    except Exception as e:
+        print("[diag] erro:", e)
+    print("[i] tick concluído (modo diag).")
+    sys.exit(0)
 
 
 # ------------------------------------------------------------ 0) modo teste
@@ -681,6 +709,150 @@ if social_ok:
             do_like(info)
         if replies_done < max_replies_tick and random.random() < 0.4:
             do_reply(info)
+
+# ------------------------------------------------------------ 2.5) responder comentários nos próprios posts
+# Via app.bsky.notification.listNotifications: reason=='reply' = alguém comentou
+# em post do bot (ou respondeu a um comentário do bot). Só responde quando a RAIZ
+# do fio é post do bot (evita meter resposta em fio alheio). Dedupe + orçamentos
+# anti-spam idênticos ao resto do bot; no máx. N respostas por thread (padrão 1).
+
+
+def comment_budget_ok():
+    if not budget_ok("replies", max_replies_day):
+        return False
+    if state.get("replies_comment", 0) >= max_comment_day:
+        return False
+    if state.get("hour_key_comment") != hour_key():
+        state["hour_key_comment"] = hour_key()
+        state["replies_comment_hour"] = 0
+    if state.get("replies_comment_hour", 0) >= max_comment_hour:
+        return False
+    return True
+
+
+def do_comment_reply(notif, root_uri, root_cid, comment_text):
+    """Responde um comentário em post próprio. Retorna True se respondeu."""
+    global replies_done
+    if rate_limited or replies_done >= max_replies_tick:
+        return False
+    if not comment_budget_ok():
+        return False
+    author = notif.get("author", {}) or {}
+    n_uri = notif.get("uri", "")
+    n_cid = notif.get("cid", "")
+    if not n_uri or not n_cid or not comment_text:
+        return False
+    if author.get("did") == client.did:
+        return False
+    if n_uri in state["seen_uris"]:
+        return False
+    if is_spamish({"text": comment_text}):
+        print("  [coment] ignorado (spam):", comment_text[:40])
+        return False
+    trep = state.setdefault("thread_replied", {})
+    if trep.get(root_uri, 0) >= max_thread_replies:
+        return False
+    # texto: IA contextual ou template (nunca repetir histórico)
+    text = None
+    if ia_use:
+        for _ in range(3):
+            try:
+                text = ai.generate_reply(comment_text, history=state["reply_history"])
+                IA_CB.record_success()
+            except Exception as e:
+                print("  [erro ia]", e)
+                METRICS.error("ia.reply")
+                IA_CB.record_failure()
+                text = ""
+            if text and text not in state["reply_history"]:
+                break
+            text = ""
+    if not text:
+        tpl = [t for t in engage.get("reply_templates", ["Boa!"]) if t not in state["reply_history"]]
+        text = random.choice(tpl) if tpl else random.choice(engage.get("reply_templates", ["Boa!"]))
+    try:
+        client.reply(text, root_uri, root_cid, n_uri, n_cid)
+        state["seen_uris"].append(n_uri)
+        trep[root_uri] = trep.get(root_uri, 0) + 1
+        if len(trep) > 200:
+            for k in list(trep)[:-200]:
+                del trep[k]
+        state["reply_history"].append(text)
+        state["reply_history"] = state["reply_history"][-40:]
+        state.setdefault("author_last_ts", {})[author.get("did", "")] = time.time()
+        state["replies_comment"] = state.get("replies_comment", 0) + 1
+        state["replies_comment_hour"] = state.get("replies_comment_hour", 0) + 1
+        bump("replies")
+        record_action()
+        replies_done += 1
+        METRICS.inc("replies_ok")
+        BSKY_CB.record_success()
+        print(f"  [coment] @{author.get('handle', '?')}: {comment_text[:40]!r} -> {text}")
+        sleep_human(*asp.get("pause_reply", [10, 25]))
+        return True
+    except RuntimeError as e:
+        print("  [erro coment]", e)
+        METRICS.error("bsky.reply")
+        BSKY_CB.record_failure()
+        rate_stop(e)
+    return False
+
+
+if social_ok and comment_cfg.get("enabled", True):
+    try:
+        n = client.list_notifications(limit=comment_cfg.get("notify_limit", 50))
+        notifs = n.get("notifications", [])
+        BSKY_CB.record_success()
+        cands = [it for it in notifs
+                 if it.get("reason") == "reply" or
+                 (comment_cfg.get("include_mentions", True) and it.get("reason") == "mention")]
+        cands.sort(key=lambda it: it.get("indexedAt", ""), reverse=True)
+        if cands:
+            print(f"[coment] {len(cands)} comentário(s)/menção(ões) para avaliar")
+        for it in cands:
+            if rate_limited or replies_done >= max_comment_tick:
+                break
+            rec = it.get("record", {}) or {}
+            if not rec.get("text") or not it.get("uri") or not it.get("cid"):
+                continue
+            if it.get("author", {}).get("did") == client.did:
+                continue
+            if it["uri"] in state["seen_uris"]:
+                continue
+            if random.random() >= comment_cfg.get("reply_prob", 0.85):
+                print("  [humano] passou reto (não respondeu o comentário)")
+                continue
+            # raiz do fio: post do bot (mention não tem fio — o próprio post é raiz)
+            if it.get("reason") == "mention":
+                root_uri, root_cid = it["uri"], it["cid"]
+            else:
+                root = rec.get("reply", {}).get("root", {}) or {}
+                if not root.get("uri"):
+                    continue
+                try:
+                    thr = client.get_thread(root["uri"], depth=0)
+                    root_post = (thr.get("thread", {}) or {}).get("post", {}) or {}
+                    if (root_post.get("author", {}) or {}).get("did") != client.did:
+                        print("  [coment] raiz não é post do bot — ignorado")
+                        continue
+                except RuntimeError as e:
+                    print("  [erro thread]", e)
+                    METRICS.error("bsky.thread")
+                    BSKY_CB.record_failure()
+                    continue
+                root_uri, root_cid = root.get("uri"), root.get("cid")
+            if not root_uri or not root_cid:
+                continue
+            do_comment_reply(it, root_uri, root_cid, rec.get("text", ""))
+        # marca notificações como lidas (best-effort, só UI — não afeta dedupe)
+        try:
+            client.update_seen()
+        except RuntimeError:
+            pass
+    except RuntimeError as e:
+        print("  [erro notifications]", e)
+        METRICS.error("bsky.notifications")
+        BSKY_CB.record_failure()
 
 # follow ocasional (só de dia, raro)
 follow_prob = auto.get("follow_prob", 0.0)

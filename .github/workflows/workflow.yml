@@ -25,6 +25,11 @@ on:
         required: false
         default: "false"
         type: boolean
+      diag_notif:
+        description: "Apenas listar notificações/comentários (só leitura)"
+        required: false
+        default: "false"
+        type: boolean
       force_bio:
         description: "Atualizar a bio do perfil agora"
         required: false
@@ -60,6 +65,7 @@ jobs:
           BSKY_FORCE_TEXT: ${{ github.event.inputs.force_text }}
           IA_ENABLED: ${{ github.event.inputs.ia_enabled }}
           BSKY_AI_TEST_ONLY: ${{ github.event.inputs.ai_test_only }}
+          BSKY_DIAG_NOTIF: ${{ github.event.inputs.diag_notif }}
           BSKY_FORCE_BIO: ${{ github.event.inputs.force_bio }}
           BSKY_FORCE_AVATAR: ${{ github.event.inputs.force_avatar }}
           G4F: "1"
