@@ -1,0 +1,23 @@
+name: diag-login
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Testar login Bluesky
+        env:
+          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+          BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
+        run: |
+          echo '== createSession com handle =='
+          curl -s -X POST 'https://bsky.social/xrpc/com.atproto.server.createSession' \
+            -H 'Content-Type: application/json' \
+            -d "{\"identifier\":\"$BSKY_HANDLE\",\"password\":\"$BSKY_APP_PASSWORD\"}"
+          echo
+          echo '== resolveHandle =='
+          curl -s 'https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=$BSKY_HANDLE'
+          echo
