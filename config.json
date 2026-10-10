@@ -189,6 +189,18 @@
   },
   "self_heal": true
  },
+ "images": {
+  "enabled": true,
+  "prob": 0.6
+ },
+ "unfollow": {
+  "enabled": true,
+  "max_per_day": 2,
+  "max_per_tick": 1,
+  "min_age_days": 2,
+  "prob": 0.5,
+  "scan_limit": 100
+ },
  "anti_spam": {
   "max_likes_per_day": 100,
   "max_replies_per_day": 36,
