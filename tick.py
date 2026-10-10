@@ -33,6 +33,7 @@ Env de IA (opcionais): G4F=1 (grátis) | OPENAI/ANTHROPIC/GEMINI keys | AI_API_K
 import atexit
 import base64
 import hashlib
+import io
 import json
 import os
 import random
@@ -85,6 +86,10 @@ niche_keywords = ev2.get("nicho_keywords", ["música", "arte", "cultura", "Brasi
 search_limit = ev2.get("search_limit", 15)
 min_like_count = ev2.get("min_like_count", 1)
 reply_in_search_prob = ev2.get("reply_in_search_prob", 0.35)
+# imagem procedural em posts + unfollow seletivo (extras autônomos)
+img_cfg = cfg.get("images", {})
+img_prob = img_cfg.get("prob", 0.6) if img_cfg.get("enabled", True) else 0.0
+unf_cfg = cfg.get("unfollow", {})
 follow_back_prob = ev2.get("follow_back_prob", 0.8)
 max_followback_tick = ev2.get("follow_back_max_per_tick", 2)
 max_followback_day = ev2.get("follow_back_max_per_day", 8)
@@ -129,6 +134,8 @@ _STATE_DEFAULTS = {
     "likes_hour": 0, "hour_key": "", "authors_today": [],
     "seen_uris": [], "reply_history": [], "post_history": [],
     "bio_date": "", "avatar_date": "", "sched_done": {}, "last_heartbeat": "",
+    "crash_seq": 0, "alert_issue_date": "", "followers_history": {},
+    "proactive_rep_today": 0, "unfollows_done": 0,
     "last_run_id": "",
     # resposta a comentários nos próprios posts
     "replies_comment": 0, "replies_comment_hour": 0, "hour_key_comment": "",
@@ -256,6 +263,8 @@ def reset_if_new_day():
         state["network_follows_hour"] = 0
         state["boosts"] = 0
         state["boosts_hour"] = 0
+        state["proactive_rep_today"] = 0
+        state["unfollows_done"] = 0
 
 
 def hour_key():
@@ -376,11 +385,36 @@ def save_state():
     print("[state] falha persistente ao sincronizar — mantém cache local")
 
 
+# alerta de falha via GitHub Issue (1 por dia, best-effort; não afeta o fluxo)
+def open_alert_issue(title, body):
+    if not (REPO and GH_TOKEN):
+        return False
+    if state.get("alert_issue_date") == today():
+        return False
+    try:
+        code, resp = gh_api("POST", f"/repos/{REPO}/issues",
+                            {"title": title, "body": body})
+        if code in (200, 201):
+            state["alert_issue_date"] = today()
+            print("[alerta] issue criada:", resp.get("html_url", ""))
+            return True
+        print(f"[alerta] falha ao criar issue: {code} {resp}")
+    except Exception as e:
+        print("[alerta] erro ao criar issue:", e)
+    return False
+
+
 # garante persistência mesmo em crash/exit (kill -9 não tem como cobrir)
 def _log_crash_and_exit(exc_type, exc_value, tb):
     print(f"[crash] exceção não capturada: {exc_type.__name__}: {exc_value}")
     import traceback
     traceback.print_exception(exc_type, exc_value, tb)
+    state["crash_seq"] = state.get("crash_seq", 0) + 1
+    if state["crash_seq"] >= 3:
+        open_alert_issue(f"[BOT] {state['crash_seq']} crashes seguidos",
+                         f"O bot travou {state['crash_seq']} vezes seguidas.\n\n"
+                         f"Último erro: {exc_type.__name__}: {exc_value}\n\n"
+                         "Cheque os logs da última execução no Actions.")
     save_state()
     sys.__excepthook__(exc_type, exc_value, tb)
 
@@ -772,6 +806,27 @@ if social_ok:
         if replies_done < max_replies_tick and random.random() < 0.4:
             do_reply(info)
 
+# ---- 2.4) comentário proativo em posts de terceiros (nicho/busca)
+# Só de dia, probabilidade configurável (reply_in_search_prob), 1 reply por tick:
+# busca posts frescos da keyword rotativa e comenta — orçamentos/cooldowns do do_reply.
+if social_ok and reply_in_search_prob > 0 and state.get("proactive_rep_today", 0) < max_replies_tick:
+    if replies_done < max_replies_tick and not rate_limited:
+        kw = random.choice(niche_keywords)
+        try:
+            posts = client.search_posts(kw, limit=search_limit)
+            cands = [post_info(p) for p in (posts.get("posts", []) if isinstance(posts, dict) else posts)]
+            cands = [c for c in cands if c["text"]]
+            cands.sort(key=lambda c: c.get("like_count", 0) or 0, reverse=True)
+            if cands and random.random() < reply_in_search_prob:
+                info = cands[0]
+                do_reply(info)
+                state["proactive_rep_today"] = state.get("proactive_rep_today", 0) + 1
+        except RuntimeError as e:
+            print("  [erro busca-coment]", e)
+            METRICS.error("bsky.search")
+            BSKY_CB.record_failure()
+            rate_stop(e)
+
 # ------------------------------------------------------------ 2.5) responder comentários nos próprios posts
 # Via app.bsky.notification.listNotifications: reason=='reply' = alguém comentou
 # em post do bot (ou respondeu a um comentário do bot). Só responde quando a RAIZ
@@ -937,6 +992,48 @@ if social_ok and follow_prob > 0 and random.random() < follow_prob:
                 METRICS.error("bsky.follow")
                 BSKY_CB.record_failure()
                 rate_stop(e)
+
+
+# ---- 3.5b) unfollow seletivo (saúde da rede, só de dia)
+# Deixa de seguir quem não segue de volta, com caps baixos (2/dia, 1/tick),
+# só contas seguidas há >= min_age_days e nunca recém-seguidos (fans_seen).
+if (unf_cfg.get("enabled", True) and social_ok
+        and state.get("unfollows_done", 0) < unf_cfg.get("max_per_day", 2)
+        and not rate_limited and not block_reason):
+    try:
+        mine = client.get_follows(client.did, limit=unf_cfg.get("scan_limit", 100))
+        follows = mine.get("records", []) or []
+        myf = client.list_followers(client.did, limit=200)
+        back = {f.get("did") for f in myf.get("followers", []) if f.get("did")}
+        done = 0
+        fans = set(state.get("fans_seen", [])) or set()
+        for rec in follows:
+            if done >= unf_cfg.get("max_per_tick", 1):
+                break
+            val = rec.get("value", {}) or {}
+            subj = val.get("subject", "")
+            if not subj or subj == client.did:
+                continue
+            if subj in back or subj in fans:
+                continue
+            criado = val.get("createdAt", "") or ""
+            if iso_age_days(criado) < unf_cfg.get("min_age_days", 2):
+                continue
+            if random.random() >= unf_cfg.get("prob", 0.5):
+                continue
+            client.unfollow(rec.get("uri", ""))
+            state["unfollows_done"] = state.get("unfollows_done", 0) + 1
+            record_action()
+            METRICS.inc("unfollow_ok")
+            BSKY_CB.record_success()
+            done += 1
+            print(f"  [limpeza] unfollow @{subj}")
+            sleep_human(*asp.get("pause_block", [15, 30]))
+    except RuntimeError as e:
+        print("  [erro unfollow]", e)
+        METRICS.error("bsky.unfollow")
+        BSKY_CB.record_failure()
+        rate_stop(e)
 
 
 # ------------------------------------------------------------ 3.6) engajamento v2 (autonomia extrema)
@@ -1315,7 +1412,7 @@ def curate_niche_post():
         if texto and len(texto) > 280 and thread_cfg.get("enabled", True):
             safe_thread(texto, "nicho")
         elif texto:
-            safe_post(texto, "nicho")
+            safe_post(texto, "nicho", img_prob=img_prob)
     except Exception as e:
         print("  [erro post-nicho]", e)
         METRICS.error("ia.post")
@@ -1454,7 +1551,59 @@ self_heal()
 
 
 # ------------------------------------------------------------ 4) postar
-def safe_post(texto, tag):
+def _gen_img(texto):
+    """Gera imagem procedural (gradiente + texto) para acompanhar posts.
+
+    Fallback silencioso: se PIL não estiver disponível ou falhar, retorna None
+    e o post segue sem imagem (nunca quebra o fluxo de postagem).
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return None
+    try:
+        seed = day_seed("img:" + (texto or "")[:60])
+        w, h = 1200, 675
+        c1 = ((seed >> 16) & 0xFF, (seed >> 8) & 0xFF, seed & 0xFF)
+        c2 = (max(0, c1[0] - 60), max(0, c1[1] - 80), min(255, c1[2] + 50))
+        img = Image.new("RGB", (w, h), c1)
+        dr = ImageDraw.Draw(img)
+        for y in range(h):
+            t = y / h
+            dr.line([(0, y), (w, y)],
+                    fill=(int(c1[0] * (1 - t) + c2[0] * t),
+                          int(c1[1] * (1 - t) + c2[1] * t),
+                          int(c1[2] * (1 - t) + c2[2] * t)))
+        # ruído sutil para não parecer imagem sólida
+        for _ in range(160):
+            x, y = random.randrange(w), random.randrange(h)
+            px = img.getpixel((x, y))
+            d = random.randint(-18, 18)
+            img.putpixel((x, y), (max(0, min(255, px[0] + d)),
+                                  max(0, min(255, px[1] + d)),
+                                  max(0, min(255, px[2] + d))))
+        # texto curto central (frase do post), fonte padrão ou DejaVu
+        font = None
+        for path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                     "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"):
+            try:
+                font = ImageFont.truetype(path, 44)
+                break
+            except Exception:
+                continue
+        if font is None:
+            font = ImageFont.load_default()
+        frase = texto.split("\n")[0].strip()[:46]
+        if frase:
+            dr.text((60, h - 120), frase, fill=(255, 255, 255), font=font)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def safe_post(texto, tag, img_prob=0.0):
     if not texto:
         return
     # corte defensivo (limite do Bluesky é 300) + dedupe por chave normalizada
@@ -1464,8 +1613,24 @@ def safe_post(texto, tag):
         return
     if not budget_ok("posts", asp.get("max_posts_per_day", 10)):
         return
+    embed = None
+    if img_prob > 0 and random.random() < img_prob:
+        raw = _gen_img(texto)
+        if raw:
+            try:
+                blob = client.upload_blob(raw, "image/png")
+                if blob and blob.get("blob"):
+                    embed = {
+                        "$type": "app.bsky.embed.images",
+                        "images": [{"alt": texto[:120], "image": blob["blob"]}],
+                    }
+                    print(f"  [img-{tag}] imagem anexada ao post")
+            except RuntimeError as e:
+                print(f"  [erro img-{tag}]", e)
+                BSKY_CB.record_failure()
+                rate_stop(e)
     try:
-        client.create_post(texto)
+        client.create_post(texto, embed=embed)
         bump("posts")
         record_action()
         state["post_history"].append(texto)
@@ -1495,7 +1660,7 @@ if not rate_limited and bsky_ok and not block_reason:
         if not texto:
             texto = "🔥 Primeiro post do bot no ar! Sigam @his08.bsky.social e fiquem ligados."
         sleep_human(*asp.get("pause_pre_post", [60, 180]))
-        safe_post(texto, "forcado")
+        safe_post(texto, "forcado", img_prob=img_prob)
 
     cur_min = time.localtime().tm_hour * 60 + time.localtime().tm_min
     jit = asp.get("schedule_jitter_min", 20)
@@ -1523,7 +1688,7 @@ if not rate_limited and bsky_ok and not block_reason:
                 METRICS.error("ia.post")
                 IA_CB.record_failure()
         sleep_human(*asp.get("pause_pre_post", [60, 180]))
-        safe_post(texto, "agendado")
+        safe_post(texto, "agendado", img_prob=img_prob)
         state.setdefault("sched_done", {})[sched_key] = today()
         break
 
@@ -1533,7 +1698,7 @@ if not rate_limited and bsky_ok and not block_reason:
     if ia_use and random.random() < extra_prob * night_mult:
         try:
             sleep_human(*asp.get("pause_pre_post", [60, 180]))
-            safe_post(ai.generate_post(history=state["post_history"]), "extra")
+            safe_post(ai.generate_post(history=state["post_history"]), "extra", img_prob=img_prob)
             IA_CB.record_success()
         except Exception as e:
             print("  [erro post-extra]", e)
@@ -1550,7 +1715,7 @@ if not rate_limited and bsky_ok and not block_reason:
         if tema:
             try:
                 sleep_human(*asp.get("pause_pre_post", [60, 180]))
-                safe_post(ai.generate_topic_post(tema, history=state["post_history"]), "trending")
+                safe_post(ai.generate_topic_post(tema, history=state["post_history"]), "trending", img_prob=img_prob)
                 IA_CB.record_success()
             except Exception as e:
                 print("  [erro post-trending]", e)
@@ -1627,6 +1792,19 @@ if not rate_limited and bsky_ok:
         print(f"[perfil] displayName={p.get('displayName')!r} bio={bio_now!r} avatar={'OK' if p.get('avatar') else 'vazio'}")
     except RuntimeError as e:
         print("  [erro get_profile-final]", e)
+
+# métrica de crescimento: histórico diário de seguidores (trim 90 dias)
+if bsky_ok:
+    try:
+        prof = client.get_profile() or {}
+        fc = prof.get("followersCount") or 0
+        fh = state.setdefault("followers_history", {})
+        fh[today()] = fc
+        keys = sorted(fh.keys())[-90:]
+        state["followers_history"] = {k: fh[k] for k in keys}
+        print(f"[métrica] seguidores hoje: {fc} (histórico {len(state['followers_history'])} dias)")
+    except RuntimeError as e:
+        print("  [erro métrica-followers]", e)
 
 # persistência da camada de operações (observabilidade / breakers / incidents / tuning)
 state["metrics"] = METRICS.to_dict()
