@@ -54,7 +54,7 @@ jobs:
       - name: Rodar bot autônomo (anti-ban extremo)
         env:
           TZ: "America/Sao_Paulo"
-          BSKY_HANDLE: ${{ secrets.BSKY_HANDLE }}
+          BSKY_HANDLE: his08.bsky.social  # hardcoded p/ eliminar variável do secret no diagnóstico
           BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
           BSKY_FORCE_POST: ${{ github.event.inputs.force_post }}
           BSKY_FORCE_TEXT: ${{ github.event.inputs.force_text }}
