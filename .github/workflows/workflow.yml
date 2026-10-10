@@ -54,7 +54,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Instalar dependências de IA
-        run: pip install -U g4f --quiet || echo "sem pacote gratuito, segue fallback"
+        run: pip install -U g4f pillow --quiet || pip install -U pillow --quiet || echo "sem pacote gratuito, segue fallback"
 
       - name: Rodar bot autônomo (anti-ban extremo)
         env:
