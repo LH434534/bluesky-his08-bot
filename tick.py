@@ -79,6 +79,23 @@ max_comment_day = comment_cfg.get("max_per_day", 10)
 max_comment_hour = comment_cfg.get("max_per_hour", 4)
 max_thread_replies = comment_cfg.get("max_thread_replies", 1)
 
+# engajamento v2 (autonomia extrema): nicho + retribuição social
+ev2 = cfg.get("engagement_v2", {})
+niche_keywords = ev2.get("nicho_keywords", ["música", "arte", "cultura", "Brasil"])
+search_limit = ev2.get("search_limit", 15)
+min_like_count = ev2.get("min_like_count", 1)
+reply_in_search_prob = ev2.get("reply_in_search_prob", 0.35)
+follow_back_prob = ev2.get("follow_back_prob", 0.8)
+max_followback_tick = ev2.get("follow_back_max_per_tick", 2)
+max_followback_day = ev2.get("follow_back_max_per_day", 8)
+max_followback_hour = ev2.get("follow_back_max_per_hour", 3)
+like_back_prob = ev2.get("like_back_prob", 0.7)
+max_likeback_tick = ev2.get("like_back_max_per_tick", 3)
+max_likeback_day = ev2.get("like_back_max_per_day", 12)
+max_likeback_hour = ev2.get("like_back_max_per_hour", 5)
+like_comment_prob = ev2.get("like_comment_prob", 0.5)
+fan_feed_limit = ev2.get("fan_feed_limit", 6)
+
 # ------------------------------------------------------------ estado persistente
 REPO = os.environ.get("GITHUB_REPOSITORY", "")
 GH_TOKEN = os.environ.get("GITHUB_TOKEN", "")
@@ -116,6 +133,15 @@ _STATE_DEFAULTS = {
     # resposta a comentários nos próprios posts
     "replies_comment": 0, "replies_comment_hour": 0, "hour_key_comment": "",
     "thread_replied": {},
+    # engajamento v2 (autonomia extrema): retribuição social + descoberta de nicho
+    "follows_back": 0, "follows_back_hour": 0, "hour_key_followback": "",
+    "liked_back": 0, "liked_back_hour": 0, "hour_key_likeback": "",
+    "fans_seen": [], "nicho_kw_idx": 0,
+    # autonomy_plus (10 sistemas): rede, boost, radar, escudo, horário, afinação
+    "network_follows": 0, "network_follows_hour": 0, "hour_key_network": "",
+    "boosts": 0, "boosts_hour": 0, "hour_key_boost": "",
+    "blocked_dids": [], "blocked_dids_count": 0,
+    "engagement_by_hour": {}, "radar_topics": {}, "tune_adj": {},
     # camada anti-ban extrema (persistida entre ticks/ciclos)
     "action_log": [], "last_social_ts": "", "blocked_until": "",
     "author_last_ts": {},
@@ -222,6 +248,14 @@ def reset_if_new_day():
         state["replies_comment"] = 0
         state["replies_comment_hour"] = 0
         state["hour_key_comment"] = ""
+        state["follows_back"] = 0
+        state["follows_back_hour"] = 0
+        state["liked_back"] = 0
+        state["liked_back_hour"] = 0
+        state["network_follows"] = 0
+        state["network_follows_hour"] = 0
+        state["boosts"] = 0
+        state["boosts_hour"] = 0
 
 
 def hour_key():
@@ -444,6 +478,23 @@ def mark_engaged(info, action):
     record_action()
 
 
+# ---- S8 mood rotativo (templates de reply variam com o humor do dia)
+def mood_templates():
+    m = day_seed("mood") % 3
+    base = engage.get("reply_templates", ["Boa!"])
+    if m == 1:
+        alt = ["véi, isso é genial 🔥", "caralho, que visão", "manda mais disso, pfv",
+               "tu resumiu tudo", "brabo dms", "só verdades", "não tankei, melhor post",
+               "exatamente isso", "tô surpreso, que foda", "posta mais, por favor"]
+    elif m == 2:
+        alt = ["curti demais, sério", "que bom que postou isso", "tava precisando ler isso hoje",
+               "melhor coisa do feed", "valeu por compartilhar", "bem pensado", "gostei muito",
+               "isso me fez o dia", "preciso falar sobre isso depois", "forte demais"]
+    else:
+        alt = ["Boa! 🔥", "Concordo demais!", "Muito bom isso.", "Tô nessa também!", "Isso aí! 👏"]
+    return [t for t in (alt + base) if t not in state["reply_history"]]
+
+
 # ------------------------------------------------------------ 0) modo diag (só leitura)
 diag_notif = os.environ.get("BSKY_DIAG_NOTIF", "").strip().lower() in ("1", "true", "yes", "sim")
 if diag_notif:
@@ -506,9 +557,13 @@ if auto.get("trending_enabled", True):
             BSKY_CB.record_success()
             print(f"[contexto] posts em alta lidos: {len(trending_posts)}")
     except RuntimeError as e:
-        print("  [erro trending]", e)
-        METRICS.error("bsky.trending")
-        BSKY_CB.record_failure()
+        if "MethodNotImplemented" in str(e) or "501" in str(e):
+            # feed "em alta" removido do PDS atual: não é falha do bot, é falta de feature
+            print("  [trending] feed 'em alta' indisponível no PDS — usando busca por nicho")
+        else:
+            print("  [erro trending]", e)
+            METRICS.error("bsky.trending")
+            BSKY_CB.record_failure()
     if not trending_posts:
         try:
             tt = client.get_trending_topics(limit=10)
@@ -520,21 +575,26 @@ if auto.get("trending_enabled", True):
                     trending_posts = [it for it in hot2.get("posts", []) if it.get("uri")]
                     print(f"[contexto] posts do tópico em alta: {len(trending_posts)}")
                 except RuntimeError as e:
-                    print("  [erro trending]", e)
-                    METRICS.error("bsky.trending")
+                    if "MethodNotImplemented" not in str(e) and "501" not in str(e):
+                        print("  [erro trending]", e)
+                        METRICS.error("bsky.trending")
         except RuntimeError as e:
-            print("  [erro trending]", e)
-            METRICS.error("bsky.trending")
-    if not trending_posts:
-        for kw in ["música", "arte", "futebol", "cinema", "Brasil", "tecnologia"]:
-            try:
-                r = client.search_posts(kw, limit=10)
-                posts = [it for it in r.get("posts", []) if it.get("uri")]
-                if posts:
-                    trending_posts = posts
-                    print(f"[contexto] busca '{kw}': {len(posts)} posts")
-                    break
-            except RuntimeError as e:
+            if "MethodNotImplemented" not in str(e) and "501" not in str(e):
+                print("  [erro trending]", e)
+                METRICS.error("bsky.trending")
+    # descoberta de nicho rotativa: cada tick usa uma keyword diferente (autonomia)
+    if not trending_posts and niche_keywords:
+        idx = state.get("nicho_kw_idx", 0) % len(niche_keywords)
+        kw = niche_keywords[idx]
+        state["nicho_kw_idx"] = (idx + 1) % len(niche_keywords)
+        try:
+            r = client.search_posts(kw, limit=search_limit)
+            posts = [it for it in r.get("posts", []) if it.get("uri")]
+            if posts:
+                trending_posts = posts
+                print(f"[contexto] busca '{kw}': {len(posts)} posts")
+        except RuntimeError as e:
+            if "MethodNotImplemented" not in str(e) and "501" not in str(e):
                 print("  [erro trending]", e)
                 METRICS.error("bsky.trending")
 
@@ -566,6 +626,8 @@ max_likes_hour = asp.get("max_likes_per_hour", 10)
 max_replies_hour = asp.get("max_replies_per_hour", 4)
 likes_done = 0
 replies_done = 0
+follows_back_done = 0
+likes_back_done = 0
 rate_limited = False
 
 # ---- anti-ban extremo: modo proteção persistente + rate headers do PDS
@@ -664,7 +726,7 @@ def do_reply(info, text=None):
                 break
             text = ""
         if not text:
-            tpl = [t for t in engage.get("reply_templates", ["Boa!"]) if t not in state["reply_history"]]
+            tpl = mood_templates()
             text = random.choice(tpl) if tpl else random.choice(engage.get("reply_templates", ["Boa!"]))
     try:
         client.reply(text, info["uri"], info["cid"], info["uri"], info["cid"])
@@ -768,7 +830,7 @@ def do_comment_reply(notif, root_uri, root_cid, comment_text):
                 break
             text = ""
     if not text:
-        tpl = [t for t in engage.get("reply_templates", ["Boa!"]) if t not in state["reply_history"]]
+        tpl = mood_templates()
         text = random.choice(tpl) if tpl else random.choice(engage.get("reply_templates", ["Boa!"]))
     try:
         client.reply(text, root_uri, root_cid, n_uri, n_cid)
@@ -877,6 +939,520 @@ if social_ok and follow_prob > 0 and random.random() < follow_prob:
                 rate_stop(e)
 
 
+# ------------------------------------------------------------ 3.6) engajamento v2 (autonomia extrema)
+# retribuição social: follow-back de novos seguidores + like-back de quem curtiu
+# + visita a fãs (curtir um post recente deles) — tudo probabilístico e com caps
+
+def ev2_ok(kind):
+    """Limites do engajamento v2 (anti-ban): tick, hora e dia."""
+    if rate_limited:
+        return False
+    if kind == "follow":
+        return (state.get("follows_back", 0) < max_followback_day
+                and state.get("follows_back_hour", 0) < max_followback_hour
+                and follows_back_done < max_followback_tick)
+    if kind == "like":
+        return (state.get("liked_back", 0) < max_likeback_day
+                and state.get("liked_back_hour", 0) < max_likeback_hour
+                and likes_back_done < max_likeback_tick)
+    return True
+
+
+def do_follow_back(author):
+    """Segue de volta um novo seguidor (reciprocidade)."""
+    global follows_back_done
+    if not ev2_ok("follow"):
+        return False
+    did = author.get("did", "")
+    handle = (author.get("handle", "") or "").lower()
+    if not did or did == client.did or "bot" in handle:
+        return False
+    if did in state.get("fans_seen", []):
+        return False
+    if is_blocked_did(did):
+        return False
+    try:
+        client.follow(did)
+        state["follows_back"] = state.get("follows_back", 0) + 1
+        state["follows_back_hour"] = state.get("follows_back_hour", 0) + 1
+        state.setdefault("fans_seen", []).append(did)
+        if len(state["fans_seen"]) > 500:
+            state["fans_seen"] = state["fans_seen"][-500:]
+        bump("follows")
+        record_action()
+        METRICS.inc("followback_ok")
+        BSKY_CB.record_success()
+        follows_back_done += 1
+        print(f"  [followback] @{handle}")
+        sleep_human(*asp.get("pause_follow", [8, 18]))
+        return True
+    except RuntimeError as e:
+        print("  [erro followback]", e)
+        METRICS.error("bsky.followback")
+        BSKY_CB.record_failure()
+        rate_stop(e)
+    return False
+
+
+def do_like_back(author, uri, cid):
+    """Curti de volta um post (like recebido ou post de fã)."""
+    global likes_back_done
+    if not ev2_ok("like"):
+        return False
+    did = author.get("did", "")
+    if not did or did == client.did or not uri or not cid:
+        return False
+    if uri in state["seen_uris"]:
+        return False
+    if is_blocked_did(did):
+        return False
+    try:
+        client.like(uri, cid)
+        state["liked_back"] = state.get("liked_back", 0) + 1
+        state["liked_back_hour"] = state.get("liked_back_hour", 0) + 1
+        state["seen_uris"].append(uri)
+        if len(state["seen_uris"]) > 800:
+            state["seen_uris"] = state["seen_uris"][-800:]
+        bump("likes")
+        record_action()
+        METRICS.inc("likeback_ok")
+        BSKY_CB.record_success()
+        likes_back_done += 1
+        print(f"  [likeback] @{author.get('handle', '?')}")
+        sleep_human(*asp.get("pause_like", [6, 14]))
+        return True
+    except RuntimeError as e:
+        print("  [erro likeback]", e)
+        METRICS.error("bsky.likeback")
+        BSKY_CB.record_failure()
+        rate_stop(e)
+    return False
+
+
+if social_ok and ev2.get("enabled", True):
+    try:
+        n = client.list_notifications(limit=ev2.get("notify_limit", 60))
+        notifs = n.get("notifications", [])
+        BSKY_CB.record_success()
+        # S5 (horário inteligente): aprende em que horas o perfil recebe engajamento
+        collect_engagement_hours(notifs)
+        # follow-back: novos seguidores (probabilístico, respeita caps)
+        for it in notifs:
+            if rate_limited or follows_back_done >= max_followback_tick:
+                break
+            if it.get("reason") != "follow":
+                continue
+            if random.random() >= follow_back_prob:
+                continue
+            do_follow_back(it.get("author", {}) or {})
+        # like-back: quem curtiu nossos posts (probabilístico, respeita caps)
+        for it in notifs:
+            if rate_limited or likes_back_done >= max_likeback_tick:
+                break
+            if it.get("reason") != "like":
+                continue
+            if random.random() >= like_back_prob:
+                continue
+            rec = it.get("record", {}) or {}
+            subj = rec.get("subject", {}) or {}
+            if subj.get("uri"):
+                do_like_back(it.get("author", {}) or {}, subj.get("uri", ""), subj.get("cid", ""))
+        try:
+            client.update_seen()
+        except RuntimeError:
+            pass
+    except RuntimeError as e:
+        print("  [erro notif v2]", e)
+        METRICS.error("bsky.notifications")
+        BSKY_CB.record_failure()
+    # visita a fãs: curtir um post recente de quem acabamos de seguir (reciprocidade orgânica)
+    if ev2.get("fan_feed_like", True) and follows_back_done > 0:
+        for did in list(state.get("fans_seen", []))[-follows_back_done:]:
+            if rate_limited or likes_back_done >= max_likeback_tick:
+                break
+            try:
+                feed = client.get_author_feed(did, limit=fan_feed_limit)
+                posts = [it for it in feed.get("feed", []) if it.get("post")]
+                cand = next((p for p in posts
+                             if p["post"].get("uri") not in state["seen_uris"]
+                             and (p["post"].get("likeCount") or 0) >= min_like_count), None)
+                if cand:
+                    post = cand["post"]
+                    do_like_back({"did": did, "handle": "fã"},
+                                 post.get("uri", ""), post.get("cid", ""))
+            except RuntimeError as e:
+                print("  [erro feed fã]", e)
+                METRICS.error("bsky.author_feed")
+                BSKY_CB.record_failure()
+                break
+
+
+# ------------------------------------------------------------ 3.7) autonomy_plus — 10 sistemas (o bot vira literalmente o melhor do mundo)
+# S1 rede | S2 boost | S3 curador | S4 radar | S5 horário inteligente
+# S6 auto-cura | S7 escudo anti-spam | S8 mood rotativo | S9 auto-afinação | S10 thread builder
+apx = cfg.get("autonomy_plus", {})
+apx_on = apx.get("enabled", True)
+net_cfg = apx.get("network", {})
+boost_cfg = apx.get("booster", {})
+cur_cfg = apx.get("curator", {})
+radar_cfg = apx.get("radar", {})
+shield_cfg = apx.get("shield", {})
+thread_cfg = apx.get("thread", {})
+sh_cfg = apx.get("smart_hours", {})
+st_cfg = apx.get("self_tune", {})
+network_done = 0
+boost_done = 0
+
+
+def apx_hour_ok(key, hkey, cap_hour):
+    """Zera contador por hora quando vira a hora; True se ainda cabe no cap."""
+    if state.get(hkey) != hour_key():
+        state[hkey] = hour_key()
+        state[key] = 0
+    return state.get(key, 0) < cap_hour
+
+
+def apx_cap_ok(key, hkey, cap_day, cap_hour, done, cap_tick):
+    if rate_limited:
+        return False
+    if not apx_hour_ok(key, hkey, cap_hour):
+        return False
+    return state.get(key, 0) < cap_day and done < cap_tick
+
+
+def is_blocked_did(did):
+    return did in state.get("blocked_dids", [])
+
+
+# ---- S7 escudo anti-spam: identifica e bloqueia perfis suspeitos
+SUS_HANDLE = re.compile(r"\b(bot|spam|promo|onlyfans|telegram|whatsapp|sorteio|ganhe|auto)\b", re.I)
+
+
+def scan_shield(notifs):
+    """Bloqueia (probabilístico) perfis suspeitos que interagem com a conta."""
+    if not (apx_on and shield_cfg.get("enabled", True)):
+        return
+    if rate_limited:
+        return
+    dia = shield_cfg.get("max_per_day", 5)
+    if state.get("blocked_dids_count", 0) >= dia:
+        return
+    for it in notifs:
+        if state.get("blocked_dids_count", 0) >= dia:
+            break
+        auth = it.get("author", {}) or {}
+        did = auth.get("did", "")
+        handle = (auth.get("handle") or "").lower()
+        if not did or did == client.did or did in state.get("blocked_dids", []):
+            continue
+        if not SUS_HANDLE.search(handle):
+            continue
+        if random.random() >= shield_cfg.get("prob", 0.6):
+            continue
+        try:
+            client.block(did)
+            state.setdefault("blocked_dids", []).append(did)
+            state["blocked_dids"] = state["blocked_dids"][-200:]
+            state["blocked_dids_count"] = state.get("blocked_dids_count", 0) + 1
+            record_action()
+            METRICS.inc("shield_block_ok")
+            BSKY_CB.record_success()
+            print(f"  [escudo] bloqueado @{handle}")
+            sleep_human(*asp.get("pause_block", [8, 20]))
+        except RuntimeError as e:
+            print("  [erro escudo]", e)
+            METRICS.error("bsky.shield")
+            BSKY_CB.record_failure()
+            rate_stop(e)
+
+
+# ---- S4 radar de tendências: acumula tópicos para o curador e futura análise
+def collect_radar(posts, topics):
+    if not (apx_on and radar_cfg.get("enabled", True)):
+        return
+    radar = state.setdefault("radar_topics", {})
+    for t in topics:
+        if t:
+            radar[t] = radar.get(t, 0) + 1
+    for item in (posts or [])[:12]:
+        txt = post_info(item).get("text", "")
+        for kw in niche_keywords:
+            if kw.lower() in txt.lower():
+                radar[kw] = radar.get(kw, 0) + 1
+    mx = radar_cfg.get("max_topics", 50)
+    if len(radar) > mx:
+        for k in list(sorted(radar, key=radar.get))[:-mx]:
+            del radar[k]
+
+
+# ---- S5 horário inteligente: aprende em que horas o perfil recebe engajamento
+def collect_engagement_hours(notifs):
+    if not (apx_on and sh_cfg.get("enabled", True)):
+        return
+    ebyh = state.setdefault("engagement_by_hour", {})
+    for it in notifs:
+        if it.get("reason") not in ("like", "reply", "follow"):
+            continue
+        idx = (it.get("indexedAt") or "")
+        try:
+            h = int(idx[11:13]) if len(idx) >= 13 else -1
+        except Exception:
+            h = -1
+        if 0 <= h <= 23:
+            ebyh[str(h)] = ebyh.get(str(h), 0) + 1
+
+
+def smart_extra_mult():
+    """Multiplicador de postagem com base nas horas de maior engajamento."""
+    if not (apx_on and sh_cfg.get("enabled", True)):
+        return 1.0
+    ebyh = state.get("engagement_by_hour", {})
+    if not ebyh:
+        return 1.0
+    top = sorted(ebyh, key=ebyh.get, reverse=True)[:sh_cfg.get("boost_top_hours", 2)]
+    if str(time.localtime().tm_hour) in top:
+        return 1.0 + sh_cfg.get("boost_mult", 0.4)
+    return 1.0
+
+
+# ---- S9 auto-afinação: ajusta probabilidades com base em sinais de vida
+def self_tune():
+    if not (apx_on and st_cfg.get("enabled", True)):
+        return
+    ebyh = state.get("engagement_by_hour", {})
+    total = sum(ebyh.values()) if ebyh else 0
+    adj = state.setdefault("tune_adj", {})
+    step = st_cfg.get("step", 0.03)
+    low = total < st_cfg.get("low_threshold", 2)
+    if low:
+        adj["extra_post_prob"] = max(auto.get("extra_post_prob", 0.8) - step, 0.4)
+        adj["follow_back_prob"] = max(follow_back_prob - step, 0.4)
+    else:
+        adj["extra_post_prob"] = min(auto.get("extra_post_prob", 0.8) + step, 0.95)
+        adj["follow_back_prob"] = min(follow_back_prob + step, 0.9)
+    state["tune_adj"] = adj
+
+
+# ---- S1 rede de crescimento: segue seguidores de quem nos segue (2º grau)
+def do_network_follow(did, handle):
+    global network_done
+    if not apx_cap_ok("network_follows", "hour_key_network",
+                      net_cfg.get("max_per_day", 8), net_cfg.get("max_per_hour", 3),
+                      network_done, net_cfg.get("max_per_tick", 2)):
+        return False
+    if not did or did == client.did or "bot" in handle.lower():
+        return False
+    if did in state.get("fans_seen", []) or is_blocked_did(did):
+        return False
+    try:
+        client.follow(did)
+        state["network_follows"] = state.get("network_follows", 0) + 1
+        state.setdefault("fans_seen", []).append(did)
+        bump("follows")
+        record_action()
+        METRICS.inc("network_follow_ok")
+        BSKY_CB.record_success()
+        network_done += 1
+        print(f"  [rede] follow @{handle}")
+        sleep_human(*asp.get("pause_follow", [8, 18]))
+        return True
+    except RuntimeError as e:
+        print("  [erro rede]", e)
+        METRICS.error("bsky.network")
+        BSKY_CB.record_failure()
+        rate_stop(e)
+    return False
+
+
+# ---- S2 boost: reposta posts populares do nicho (sem quote, só repost)
+def do_boost(info):
+    global boost_done
+    if not apx_cap_ok("boosts", "hour_key_boost",
+                      boost_cfg.get("max_per_day", 4), boost_cfg.get("max_per_hour", 2),
+                      boost_done, boost_cfg.get("max_per_tick", 1)):
+        return False
+    if not info["uri"] or not info["cid"] or info["did"] == client.did:
+        return False
+    if info["uri"] in state["seen_uris"] or is_blocked_did(info["did"]):
+        return False
+    if is_spamish(info):
+        return False
+    try:
+        client.repost(info["uri"], info["cid"])
+        state["boosts"] = state.get("boosts", 0) + 1
+        state["seen_uris"].append(info["uri"])
+        record_action()
+        METRICS.inc("boost_ok")
+        BSKY_CB.record_success()
+        boost_done += 1
+        print(f"  [boost] repost de @{info['handle']}")
+        sleep_human(*asp.get("pause_block", [10, 25]))
+        return True
+    except RuntimeError as e:
+        print("  [erro boost]", e)
+        METRICS.error("bsky.boost")
+        BSKY_CB.record_failure()
+        rate_stop(e)
+    return False
+
+
+# ---- S3 curador de nicho: gera post temático da keyword rotativa
+def curate_niche_post():
+    if not (apx_on and cur_cfg.get("enabled", True) and ia_use):
+        return
+    if not social_ok:
+        return
+    if random.random() >= cur_cfg.get("nicho_post_prob", 0.5) * (0.4 if is_night else 1.0):
+        return
+    if not niche_keywords:
+        return
+    idx = state.get("nicho_kw_idx", 0) % len(niche_keywords)
+    kw = niche_keywords[idx]
+    try:
+        sleep_human(*asp.get("pause_pre_post", [60, 180]))
+        texto = ai.generate_topic_post(kw, history=state["post_history"])
+        IA_CB.record_success()
+        if texto and len(texto) > 280 and thread_cfg.get("enabled", True):
+            safe_thread(texto, "nicho")
+        elif texto:
+            safe_post(texto, "nicho")
+    except Exception as e:
+        print("  [erro post-nicho]", e)
+        METRICS.error("ia.post")
+        IA_CB.record_failure()
+
+
+# ---- S6 auto-cura: compacta estruturas de estado e remove lixo
+def self_heal():
+    if not (apx_on and apx.get("self_heal", True)):
+        return
+    state["seen_uris"] = state["seen_uris"][-800:]
+    state["fans_seen"] = state["fans_seen"][-500:]
+    state["action_log"] = state["action_log"][-120:]
+    state["reply_history"] = state["reply_history"][-40:]
+    state["post_history"] = state["post_history"][-30:]
+    tr = state.get("thread_replied", {})
+    if len(tr) > 200:
+        for k in list(tr)[:-200]:
+            del tr[k]
+    alts = state.get("author_last_ts", {})
+    if len(alts) > 300:
+        for k in list(alts)[:-300]:
+            del alts[k]
+    sched = state.get("sched_done", {})
+    for k in list(sched):
+        if k != today() and k not in sched:
+            del sched[k]
+    # garante defaults novos
+    for k in ("network_follows", "boosts", "blocked_dids_count"):
+        state.setdefault(k, 0)
+    state.setdefault("blocked_dids", [])
+    state.setdefault("engagement_by_hour", {})
+    state.setdefault("radar_topics", {})
+    state.setdefault("tune_adj", {})
+
+
+# ---- S10 thread builder: divide texto longo em thread encadeada
+def split_chunks(texto, size):
+    return [texto[i:i + size] for i in range(0, len(texto), size)]
+
+
+def safe_thread(texto, tag):
+    """Posta texto longo como thread (1º post + replies encadeadas)."""
+    if not thread_cfg.get("enabled", True):
+        return False
+    partes = [bot_utils.fit_length(p, thread_cfg.get("max_chars", 295))
+              for p in split_chunks(texto, 280) if p.strip()]
+    if len(partes) < 2:
+        return False
+    if not budget_ok("posts", asp.get("max_posts_per_day", 10)):
+        return False
+    try:
+        first = client.create_post(partes[0])
+        bump("posts")
+        record_action()
+        state["post_history"].append(partes[0])
+        parent_uri = (first.get("uri") or "")
+        parent_cid = (first.get("cid") or "")
+        for p in partes[1:]:
+            sleep_human(*asp.get("pause_reply", [6, 15]))
+            rep = client.reply(p, parent_uri, parent_cid, parent_uri, parent_cid)
+            state["post_history"].append(p)
+            parent_uri = (rep.get("uri") or "") or parent_uri
+            parent_cid = (rep.get("cid") or "") or parent_cid
+        state["post_history"] = state["post_history"][-30:]
+        METRICS.inc("posts_ok")
+        BSKY_CB.record_success()
+        print(f"  [thread-{tag}] {len(partes)} posts encadeados")
+        sleep_human(*asp.get("pause_block", [30, 90]))
+        return True
+    except RuntimeError as e:
+        print(f"  [erro thread-{tag}]", e)
+        METRICS.error("bsky.post")
+        BSKY_CB.record_failure()
+        rate_stop(e)
+    return False
+
+
+# ---- execução dos sistemas de leitura/escrita (respeita modo proteção)
+if apx_on and bsky_ok and not block_reason:
+    # S7 escudo: varre notificações em busca de perfis suspeitos
+    if shield_cfg.get("enabled", True):
+        try:
+            n_sh = client.list_notifications(limit=50)
+            scan_shield(n_sh.get("notifications", []))
+            BSKY_CB.record_success()
+        except RuntimeError as e:
+            print("  [erro escudo-notif]", e)
+            BSKY_CB.record_failure()
+
+    if social_ok:
+        # S1 rede: seguidores de quem nos segue (rede de 2º grau)
+        if net_cfg.get("enabled", True) and network_done < net_cfg.get("max_per_tick", 2):
+            try:
+                myf = client.list_followers(client.did, limit=net_cfg.get("followers_limit", 40))
+                my_followers = [f for f in myf.get("followers", []) if f.get("did") != client.did]
+                srcs = my_followers[:net_cfg.get("source_limit", 3)]
+                for src in srcs:
+                    if rate_limited or network_done >= net_cfg.get("max_per_tick", 2):
+                        break
+                    if is_blocked_did(src.get("did", "")):
+                        continue
+                    try:
+                        fr = client.list_followers(src["did"], limit=net_cfg.get("followers_limit", 40))
+                        cands = [f for f in fr.get("followers", []) if f.get("did") != client.did]
+                    except RuntimeError as e:
+                        print("  [erro rede-followers]", e)
+                        BSKY_CB.record_failure()
+                        continue
+                    for f in cands:
+                        if rate_limited or network_done >= net_cfg.get("max_per_tick", 2):
+                            break
+                        if random.random() < net_cfg.get("prob", 0.35):
+                            do_network_follow(f.get("did", ""), f.get("handle", "?"))
+            except RuntimeError as e:
+                print("  [erro rede]", e)
+                BSKY_CB.record_failure()
+
+        # S2 boost: reposta posts populares do contexto
+        if boost_cfg.get("enabled", True) and boost_done < boost_cfg.get("max_per_tick", 1):
+            cands = [post_info(it) for it in (trending_posts + timeline_posts)
+                     if post_info(it).get("uri")]
+            cands.sort(key=lambda i: i["like_count"], reverse=True)
+            for info in cands:
+                if rate_limited or boost_done >= boost_cfg.get("max_per_tick", 1):
+                    break
+                if info["like_count"] < boost_cfg.get("min_like", 3):
+                    break
+                if random.random() < boost_cfg.get("prob", 0.4):
+                    do_boost(info)
+
+# S4 radar + S9 auto-afinação + S6 auto-cura (leitura/estado: rodam mesmo em modo proteção)
+collect_radar(trending_posts, trending_topics)
+self_tune()
+self_heal()
+
+
 # ------------------------------------------------------------ 4) postar
 def safe_post(texto, tag):
     if not texto:
@@ -952,6 +1528,7 @@ if not rate_limited and bsky_ok and not block_reason:
         break
 
     extra_prob = auto.get("extra_post_prob", 0.65)
+    extra_prob *= smart_extra_mult()   # S5 horário inteligente
     night_mult = 0.4 if is_night else 1.0
     if ia_use and random.random() < extra_prob * night_mult:
         try:
@@ -979,6 +1556,9 @@ if not rate_limited and bsky_ok and not block_reason:
                 print("  [erro post-trending]", e)
                 METRICS.error("ia.post")
                 IA_CB.record_failure()
+
+    # S3 curador de nicho: post temático da keyword rotativa (autônomo)
+    curate_niche_post()
 
 
 # ------------------------------------------------------------ 5) perfil: bio + avatar
