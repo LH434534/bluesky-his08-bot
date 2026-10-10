@@ -94,6 +94,40 @@
   "max_thread_replies": 1,
   "notify_limit": 50
  },
+ "engagement_v2": {
+  "enabled": true,
+  "nicho_keywords": [
+   "música",
+   "arte",
+   "cultura",
+   "futebol",
+   "cinema",
+   "Brasil",
+   "meme",
+   "tecnologia",
+   "games",
+   "anime",
+   "humor",
+   "viagem",
+   "fotografia",
+   "comida"
+  ],
+  "search_limit": 15,
+  "min_like_count": 1,
+  "reply_in_search_prob": 0.35,
+  "follow_back": true,
+  "follow_back_prob": 0.8,
+  "follow_back_max_per_tick": 2,
+  "follow_back_max_per_day": 8,
+  "follow_back_max_per_hour": 3,
+  "like_back": true,
+  "like_back_prob": 0.7,
+  "like_back_max_per_tick": 3,
+  "like_back_max_per_day": 12,
+  "like_back_max_per_hour": 5,
+  "like_comment_prob": 0.5,
+  "fan_feed_limit": 6
+ },
  "autonomy": {
   "trending_enabled": true,
   "trending_feed": "at://did:plc:z72i7hdynmk6r22z27h6tv6ah/app.bsky.feed.generator/whats-hot",
@@ -104,6 +138,56 @@
   "follow_prob": 0.2,
   "max_likes_per_tick": 6,
   "max_replies_per_tick": 3
+ },
+ "autonomy_plus": {
+  "enabled": true,
+  "network": {
+   "enabled": true,
+   "prob": 0.35,
+   "max_per_tick": 2,
+   "max_per_day": 8,
+   "max_per_hour": 3,
+   "source_limit": 3,
+   "followers_limit": 40
+  },
+  "booster": {
+   "enabled": true,
+   "prob": 0.4,
+   "max_per_tick": 1,
+   "max_per_day": 4,
+   "max_per_hour": 2,
+   "min_like": 3
+  },
+  "curator": {
+   "enabled": true,
+   "nicho_post_prob": 0.5
+  },
+  "radar": {
+   "enabled": true,
+   "max_topics": 50
+  },
+  "shield": {
+   "enabled": true,
+   "prob": 0.6,
+   "max_per_day": 5
+  },
+  "smart_hours": {
+   "enabled": true,
+   "boost_top_hours": 2,
+   "boost_mult": 0.4
+  },
+  "self_tune": {
+   "enabled": true,
+   "low_threshold": 2,
+   "step": 0.03
+  },
+  "mood_rotate": true,
+  "thread": {
+   "enabled": true,
+   "min_len": 280,
+   "max_chars": 295
+  },
+  "self_heal": true
  },
  "anti_spam": {
   "max_likes_per_day": 100,
