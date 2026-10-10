@@ -24,6 +24,7 @@ import sys
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 
 # ---------------------------------------------------------------- config
 API = "https://bsky.social/xrpc"
@@ -241,6 +242,36 @@ class BskyClient:
             "collection": "app.bsky.graph.follow",
             "record": rec
         }, method="POST")
+
+    def get_follows(self, did, limit=100):
+        """Lista os follows (seguidos) de um usuário via listRecords paginado."""
+        records = []
+        cursor = None
+        while len(records) < limit:
+            path = f"/com.atproto.repo.listRecords?repo={did}&collection=app.bsky.graph.follow&limit=100"
+            if cursor:
+                path += "&cursor=" + urllib.parse.quote(cursor)
+            d = self._req(path)
+            records.extend(d.get("records", []) or [])
+            cursor = d.get("cursor")
+            if not cursor:
+                break
+        return {"records": records[:limit]}
+
+    def list_followers(self, did, limit=200):
+        """Lista os seguidores de um usuário via getFollowers paginado."""
+        followers = []
+        cursor = None
+        while len(followers) < limit:
+            path = f"/app.bsky.graph.getFollowers?actor={did}&limit=100"
+            if cursor:
+                path += "&cursor=" + urllib.parse.quote(cursor)
+            d = self._req(path)
+            followers.extend(d.get("followers", []) or [])
+            cursor = d.get("cursor")
+            if not cursor:
+                break
+        return {"followers": followers[:limit]}
 
     def get_profile(self):
         """Perfil do próprio usuário."""
