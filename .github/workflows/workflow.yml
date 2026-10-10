@@ -63,7 +63,7 @@ jobs:
           BSKY_FORCE_BIO: ${{ github.event.inputs.force_bio }}
           BSKY_FORCE_AVATAR: ${{ github.event.inputs.force_avatar }}
           G4F: "1"
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
