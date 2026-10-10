@@ -41,6 +41,8 @@ permissions:
 
 jobs:
   run:
+    # repo pode ser público p/ Actions ilimitado: bloqueia dispatch de estranhos
+    if: github.event_name == 'schedule' || github.actor == 'LH434534'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -62,6 +64,7 @@ jobs:
           BSKY_FORCE_AVATAR: ${{ github.event.inputs.force_avatar }}
           G4F: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
