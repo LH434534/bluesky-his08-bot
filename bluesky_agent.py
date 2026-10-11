@@ -151,12 +151,14 @@ class BskyClient:
         self.did = r.get("did")
         return self.did
 
-    def create_post(self, text):
+    def create_post(self, text, embed=None):
         rec = {
             "$type": "app.bsky.feed.post",
             "text": text,
             "createdAt": datetime_now_iso()
         }
+        if embed is not None:
+            rec["embed"] = embed
         return self._req("/com.atproto.repo.createRecord", {
             "repo": self.did,
             "collection": "app.bsky.feed.post",
@@ -272,6 +274,59 @@ class BskyClient:
             if not cursor:
                 break
         return {"followers": followers[:limit]}
+
+    def get_author_feed(self, did, limit=25):
+        """Feed de um autor específico (para reciprocidade com fãs)."""
+        feed = []
+        cursor = None
+        while len(feed) < limit:
+            path = f"/app.bsky.feed.getAuthorFeed?actor={did}&limit=100"
+            if cursor:
+                path += "&cursor=" + urllib.parse.quote(cursor)
+            d = self._req(path)
+            feed.extend(d.get("feed", []) or [])
+            cursor = d.get("cursor")
+            if not cursor:
+                break
+        return {"feed": feed[:limit]}
+
+    def unfollow(self, record_uri):
+        """Deixa de seguir um usuário (apaga o record app.bsky.graph.follow)."""
+        parts = record_uri.split("/")
+        if len(parts) < 5 or parts[2] != "app.bsky.graph.follow":
+            raise RuntimeError(f"uri de follow inválida: {record_uri}")
+        rkey = parts[4]
+        return self._req("/com.atproto.repo.deleteRecord", {
+            "repo": self.did,
+            "collection": "app.bsky.graph.follow",
+            "rkey": rkey,
+        }, method="POST")
+
+    def repost(self, uri, cid):
+        """Faz repost de um post."""
+        rec = {
+            "$type": "app.bsky.feed.repost",
+            "subject": {"uri": uri, "cid": cid},
+            "createdAt": datetime_now_iso()
+        }
+        return self._req("/com.atproto.repo.createRecord", {
+            "repo": self.did,
+            "collection": "app.bsky.feed.repost",
+            "record": rec
+        }, method="POST")
+
+    def block(self, did):
+        """Bloqueia um usuário."""
+        rec = {
+            "$type": "app.bsky.graph.block",
+            "subject": did,
+            "createdAt": datetime_now_iso()
+        }
+        return self._req("/com.atproto.repo.createRecord", {
+            "repo": self.did,
+            "collection": "app.bsky.graph.block",
+            "record": rec
+        }, method="POST")
 
     def get_profile(self):
         """Perfil do próprio usuário."""
