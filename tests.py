@@ -299,6 +299,9 @@ class TestTickSmoke(unittest.TestCase):
             import time, random
             old_time = time.sleep
             time.sleep = lambda s: None
+            # relógio fixo em horário diurno (evita dependência de hora real — falha à noite)
+            old_localtime = time.localtime
+            time.localtime = lambda t=None: old_localtime(1601733600)  # 2020-10-03 14:00
             old_random = (random.random, random.uniform)
             random.random = lambda: 0.05
             random.uniform = lambda a, b: 0.0
@@ -317,6 +320,7 @@ class TestTickSmoke(unittest.TestCase):
                     os.environ[k] = v
             import time, random
             time.sleep = old_time
+            time.localtime = old_localtime
             random.random, random.uniform = old_random
             if os.path.exists(state_file):
                 os.remove(state_file)
@@ -473,6 +477,8 @@ class TestAntiBanExtremo(unittest.TestCase):
             import time, random
             old_time = time.sleep
             time.sleep = lambda s: None
+            old_localtime = time.localtime
+            time.localtime = lambda t=None: old_localtime(1601733600)  # horário fixo diurno
             old_random = (random.random, random.uniform)
             random.random = lambda: 0.05
             random.uniform = lambda a, b: 0.0
@@ -491,6 +497,7 @@ class TestAntiBanExtremo(unittest.TestCase):
                     os.environ[k] = v
             import time, random
             time.sleep = old_time
+            time.localtime = old_localtime
             random.random, random.uniform = old_random
             if os.path.exists(state_file):
                 os.remove(state_file)
