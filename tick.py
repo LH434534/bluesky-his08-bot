@@ -1126,6 +1126,38 @@ def do_like_back(author, uri, cid):
     return False
 
 
+# ------------------------------------------------------------ 3.7) autonomy_plus — 10 sistemas (o bot vira literalmente o melhor do mundo)
+# S1 rede | S2 boost | S3 curador | S4 radar | S5 horário inteligente
+# S6 auto-cura | S7 escudo anti-spam | S8 mood rotativo | S9 auto-afinação | S10 thread builder
+apx = cfg.get("autonomy_plus", {})
+apx_on = apx.get("enabled", True)
+net_cfg = apx.get("network", {})
+boost_cfg = apx.get("booster", {})
+cur_cfg = apx.get("curator", {})
+radar_cfg = apx.get("radar", {})
+shield_cfg = apx.get("shield", {})
+thread_cfg = apx.get("thread", {})
+sh_cfg = apx.get("smart_hours", {})
+st_cfg = apx.get("self_tune", {})
+
+
+# ---- S5 horário inteligente: aprende em que horas o perfil recebe engajamento
+def collect_engagement_hours(notifs):
+    if not (apx_on and sh_cfg.get("enabled", True)):
+        return
+    ebyh = state.setdefault("engagement_by_hour", {})
+    for it in notifs:
+        if it.get("reason") not in ("like", "reply", "follow"):
+            continue
+        idx = (it.get("indexedAt") or "")
+        try:
+            h = int(idx[11:13]) if len(idx) >= 13 else -1
+        except Exception:
+            h = -1
+        if 0 <= h <= 23:
+            ebyh[str(h)] = ebyh.get(str(h), 0) + 1
+
+
 if social_ok and ev2.get("enabled", True):
     try:
         n = client.list_notifications(limit=ev2.get("notify_limit", 60))
@@ -1187,16 +1219,6 @@ if social_ok and ev2.get("enabled", True):
 # ------------------------------------------------------------ 3.7) autonomy_plus — 10 sistemas (o bot vira literalmente o melhor do mundo)
 # S1 rede | S2 boost | S3 curador | S4 radar | S5 horário inteligente
 # S6 auto-cura | S7 escudo anti-spam | S8 mood rotativo | S9 auto-afinação | S10 thread builder
-apx = cfg.get("autonomy_plus", {})
-apx_on = apx.get("enabled", True)
-net_cfg = apx.get("network", {})
-boost_cfg = apx.get("booster", {})
-cur_cfg = apx.get("curator", {})
-radar_cfg = apx.get("radar", {})
-shield_cfg = apx.get("shield", {})
-thread_cfg = apx.get("thread", {})
-sh_cfg = apx.get("smart_hours", {})
-st_cfg = apx.get("self_tune", {})
 network_done = 0
 boost_done = 0
 
@@ -1282,23 +1304,10 @@ def collect_radar(posts, topics):
             del radar[k]
 
 
+# ---- S5 horário inteligente (definição movida para antes do uso no fluxo)
+
+
 # ---- S5 horário inteligente: aprende em que horas o perfil recebe engajamento
-def collect_engagement_hours(notifs):
-    if not (apx_on and sh_cfg.get("enabled", True)):
-        return
-    ebyh = state.setdefault("engagement_by_hour", {})
-    for it in notifs:
-        if it.get("reason") not in ("like", "reply", "follow"):
-            continue
-        idx = (it.get("indexedAt") or "")
-        try:
-            h = int(idx[11:13]) if len(idx) >= 13 else -1
-        except Exception:
-            h = -1
-        if 0 <= h <= 23:
-            ebyh[str(h)] = ebyh.get(str(h), 0) + 1
-
-
 def smart_extra_mult():
     """Multiplicador de postagem com base nas horas de maior engajamento."""
     if not (apx_on and sh_cfg.get("enabled", True)):
