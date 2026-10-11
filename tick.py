@@ -1447,7 +1447,7 @@ def self_heal():
             del alts[k]
     sched = state.get("sched_done", {})
     for k in list(sched):
-        if k != today() and k not in sched:
+        if k != today():
             del sched[k]
     # garante defaults novos
     for k in ("network_follows", "boosts", "blocked_dids_count"):
