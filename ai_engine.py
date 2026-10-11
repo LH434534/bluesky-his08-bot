@@ -192,9 +192,19 @@ class AIEngine:
             # timeout de 50s por chamada: usa thread DAEMON para o tick nunca ficar
             # preso se o g4f pendurar (ThreadPoolExecutor.__exit__ faria wait=True).
             try:
+                import g4f
                 from g4f.client import Client as G4FClient
             except ImportError as e:
                 raise RuntimeError("g4f não instalado (pip install -U g4f)") from e
+            try:
+                _prov = getattr(g4f, "Provider", None)
+                for _n in dir(_prov):
+                    _p = getattr(_prov, _n, None)
+                    if isinstance(_p, type) and not _n.startswith("_") and not hasattr(_p, "working"):
+                        try: _p.working = True
+                        except Exception: pass
+            except Exception:
+                pass
             import threading
 
             box = {}
