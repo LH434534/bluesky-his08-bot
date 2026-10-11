@@ -165,6 +165,20 @@ class AIEngine:
         """Remove hashtags de replies (nunca deve haver hashtag em resposta)."""
         return re.sub(r"\s*#[A-Za-zÀ-ÿ0-9_]+\s*", " ", (text or "")).strip()
 
+    @staticmethod
+    def _reply_is_contextual(original, reply):
+        """Exige que a resposta reutilize uma ideia concreta do post-alvo."""
+        stop = {"para", "como", "mais", "muito", "isso", "essa", "esse", "aqui", "sobre",
+                "quando", "porque", "qual", "quem", "com", "uma", "uns", "umas", "que",
+                "não", "sim", "mas", "pra", "por", "dos", "das", "nos", "nas", "você", "vocês"}
+
+        def stems(value):
+            words = re.findall(r"[A-Za-zÀ-ÿ0-9]{4,}", (value or "").casefold())
+            return {w[:5] for w in words if w not in stop}
+
+        source, answer = stems(original), stems(reply)
+        return bool(source and answer and source & answer)
+
     # ------------------------------------------------------------ validação
     def _validate(self, text, limit, history=()):
         """Valida texto gerado. Retorna True se pode ser usado."""
@@ -337,9 +351,12 @@ class AIEngine:
         sys = persona_system(
             "Responda com 1 frase curta (máx 120 caracteres), do jeito que um mlk de 18 responde um amigo "
             "ou alguém que ele nem conhece no feed: natural, sincero, às vezes engraçado, às vezes só concordando. "
-            "Nunca pareça resposta pronta de atendente. NUNCA use hashtags em respostas."
+            "Nunca pareça resposta pronta de atendente. NUNCA use hashtags em respostas. "
+            "OBRIGATÓRIO: mencione uma palavra ou ideia concreta do post; se não entendeu, não responda."
         )
-        user = f"O post é: \"{original[:200]}\"\nEscreva sua resposta:"
+        user = (f"O post é: \"{original[:200]}\"\n"
+                "Responda especificamente ao assunto acima e reutilize uma palavra-chave dele. "
+                "Não invente outro tema. Escreva sua resposta:")
         for _ in range(MAX_TRIES):
             try:
                 raw = self._complete(sys, user, temperature=0.8)
@@ -347,7 +364,7 @@ class AIEngine:
                 print("  [ia] falha:", type(e).__name__, str(e)[:120])
                 raw = None
             text = self._strip_hashtags(self._clean(raw or ""))
-            if self._validate(text, 120, history):
+            if self._validate(text, 120, history) and self._reply_is_contextual(original, text):
                 return text
         print("  [ia] reply rejeitado após", MAX_TRIES, "tentativas — usando template fixo")
         return ""

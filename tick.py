@@ -760,8 +760,12 @@ def do_reply(info, text=None):
                 break
             text = ""
         if not text:
-            tpl = mood_templates()
-            text = random.choice(tpl) if tpl else random.choice(engage.get("reply_templates", ["Boa!"]))
+            tpl = mood_templates() or engage.get("reply_templates", [])
+            tpl = [t for t in tpl if aie.AIEngine._reply_is_contextual(info["text"], t)]
+            if not tpl:
+                print("  [reply] descartado: nenhum fallback contextual")
+                return
+            text = random.choice(tpl)
     try:
         client.reply(text, info["uri"], info["cid"], info["uri"], info["cid"])
         mark_engaged(info, "reply")
@@ -885,8 +889,12 @@ def do_comment_reply(notif, root_uri, root_cid, comment_text):
                 break
             text = ""
     if not text:
-        tpl = mood_templates()
-        text = random.choice(tpl) if tpl else random.choice(engage.get("reply_templates", ["Boa!"]))
+        tpl = mood_templates() or engage.get("reply_templates", [])
+        tpl = [t for t in tpl if aie.AIEngine._reply_is_contextual(comment_text, t)]
+        if not tpl:
+            print("  [coment] descartado: nenhum fallback contextual")
+            return False
+        text = random.choice(tpl)
     try:
         client.reply(text, root_uri, root_cid, n_uri, n_cid)
         state["seen_uris"].append(n_uri)
