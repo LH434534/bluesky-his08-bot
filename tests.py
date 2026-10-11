@@ -18,6 +18,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -169,7 +170,7 @@ def make_bsky_stub(log):
                 "uri": "at://did:test:stub/app.bsky.feed.post/1",
                 "cid": "cid1",
                 "author": {"handle": "alvo.bsky.social", "did": "did:alvo"},
-                "record": {"text": "curti demais música brasileira hoje", "createdAt": "2026-10-04T10:00:00.000Z"},
+                "record": {"text": "curti demais música brasileira hoje", "createdAt": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")},
             }}]}
 
         def get_popular(self, limit=20):
@@ -202,9 +203,17 @@ def make_bsky_stub(log):
             log.append(("follow", did))
             return {}
 
-        def create_post(self, text):
+        def create_post(self, text, embed=None):
             log.append(("post", text))
             return {"uri": "at://new"}
+
+        def get_follows(self, did, limit=100):
+            log.append(("get_follows", did))
+            return {"records": []}
+
+        def list_followers(self, did, limit=100):
+            log.append(("list_followers", did))
+            return {"followers": []}
 
         def get_profile(self):
             return {"displayName": "his08", "description": "bio atual", "avatar": "x"}
