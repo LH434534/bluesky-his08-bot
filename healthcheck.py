@@ -105,7 +105,7 @@ def main():
     #    filtra pelo workflow do bot — não pode ver o próprio run do healthcheck
     state = {}
     reason = None
-    code, resp = gh("GET", "actions/workflows/bluesky-bot.yml/runs?per_page=5")
+    code, resp = gh("GET", "actions/workflows/workflow.yml/runs?per_page=5")
     if code == 200:
         runs = resp.get("workflow_runs", [])
         if runs:
