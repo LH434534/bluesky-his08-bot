@@ -1055,6 +1055,10 @@ def ev2_ok(kind):
     return True
 
 
+def is_blocked_did(did):
+    return did in state.get("blocked_dids", [])
+
+
 def do_follow_back(author):
     """Segue de volta um novo seguidor (reciprocidade)."""
     global follows_back_done
@@ -1237,10 +1241,6 @@ def apx_cap_ok(key, hkey, cap_day, cap_hour, done, cap_tick):
     if not apx_hour_ok(key, hkey, cap_hour):
         return False
     return state.get(key, 0) < cap_day and done < cap_tick
-
-
-def is_blocked_did(did):
-    return did in state.get("blocked_dids", [])
 
 
 # ---- S7 escudo anti-spam: identifica e bloqueia perfis suspeitos
