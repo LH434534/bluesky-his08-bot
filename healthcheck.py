@@ -17,9 +17,11 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 
-TOKEN = os.environ.get("GITHUB_TOKEN", "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")
+# Token vem SEMPRE do ambiente (workflow injeta secrets.GH_PAT).
+# NUNCA colocar fallback hardcoded aqui — repo é público e vazar PAT é risco grave.
+TOKEN = os.environ.get("GITHUB_TOKEN", "")
 REPO = "LH434534/bluesky-his08-bot"
-WF_ID = "373662044"
+WF_ID = os.environ.get("BSKY_WORKFLOW_ID", "373662044")
 STATE_FILE = "state.json"
 HIST_FILE = "health_history.json"
 
@@ -35,6 +37,8 @@ def log(msg):
 
 
 def gh(method, path, payload=None):
+    if not TOKEN:
+        return 0, {"error": "GITHUB_TOKEN_ausente"}
     url = f"https://api.github.com/repos/{REPO}/{path}"
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, data=data, method=method)
@@ -97,10 +101,11 @@ def main():
                 pass
     now = time.time()
 
-    # 1) estado do último run do bot (fonte primária de verdade)
+    # 1) estado do último run do BOT (fonte primária de verdade)
+    #    filtra pelo workflow do bot — não pode ver o próprio run do healthcheck
     state = {}
     reason = None
-    code, resp = gh("GET", "actions/runs?per_page=5")
+    code, resp = gh("GET", "actions/workflows/bluesky-bot.yml/runs?per_page=5")
     if code == 200:
         runs = resp.get("workflow_runs", [])
         if runs:
