@@ -293,7 +293,7 @@ class BskyClient:
     def unfollow(self, record_uri):
         """Deixa de seguir um usuário (apaga o record app.bsky.graph.follow)."""
         parts = record_uri.split("/")
-        if len(parts) < 5 or parts[2] != "app.bsky.graph.follow":
+        if len(parts) < 5 or parts[3] != "app.bsky.graph.follow":
             raise RuntimeError(f"uri de follow inválida: {record_uri}")
         rkey = parts[4]
         return self._req("/com.atproto.repo.deleteRecord", {
