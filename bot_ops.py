@@ -26,7 +26,6 @@ arquitetura de nenhuma empresa específica:
 Módulo 100% stdlib (roda no runner do GitHub Actions sem dependências extras).
 """
 import json
-import math
 import random
 import time
 from datetime import datetime, timezone
@@ -54,7 +53,7 @@ class Metrics:
     def __init__(self, raw=None):
         raw = raw or {}
         self.counters = dict(raw.get("counters") or {})
-        self.lat = dict(raw.get("lat") or {})          # name -> {n,sum,min,max}
+        self.latency = dict(raw.get("lat") or {})      # name -> {n,sum,min,max}
         self.errors = list(raw.get("errors") or [])    # [{ts, sig}]
         self.max_errors = int(raw.get("max_errors") or 300)
 
@@ -62,7 +61,7 @@ class Metrics:
         self.counters[name] = self.counters.get(name, 0) + n
 
     def lat(self, name, dur_ms):
-        e = self.lat.setdefault(name, {"n": 0, "sum": 0.0, "min": None, "max": 0.0})
+        e = self.latency.setdefault(name, {"n": 0, "sum": 0.0, "min": None, "max": 0.0})
         e["n"] += 1
         e["sum"] += dur_ms
         e["min"] = dur_ms if e["min"] is None else min(e["min"], dur_ms)
@@ -92,7 +91,7 @@ class Metrics:
         return ok / (ok + fail)
 
     def to_dict(self):
-        return {"counters": self.counters, "lat": self.lat,
+        return {"counters": self.counters, "lat": self.latency,
                 "errors": self.errors[-self.max_errors:], "max_errors": self.max_errors}
 
 

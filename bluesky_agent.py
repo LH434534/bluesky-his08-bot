@@ -16,7 +16,6 @@ Segurança:
   - proteções anti-spam embutidas (intervalo mínimo, jitter aleatório, cooldown)
 """
 import argparse
-import hashlib
 import json
 import os
 import random

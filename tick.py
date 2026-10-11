@@ -1774,7 +1774,7 @@ if not rate_limited and bsky_ok:
         seed = day_seed("avatar")
         urls = [
             f"https://robohash.org/his08-{seed}.png?size=400x400",
-            f"https://ui-avatars.com/api/?name=his08&size=400&background=1e3a5f&color=fff",
+            "https://ui-avatars.com/api/?name=his08&size=400&background=1e3a5f&color=fff",
         ]
         for url in urls:
             try:

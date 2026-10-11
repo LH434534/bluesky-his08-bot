@@ -16,7 +16,6 @@ import runpy
 import hashlib
 import json
 import sys
-import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
@@ -508,7 +507,6 @@ class TestAntiBanExtremo(unittest.TestCase):
         self.assertIn("login", log)
 
     def test_jitter_deterministico_dentro_da_janela(self):
-        import bluesky_agent as ba
         jit = 20
         seeds = []
         for i in range(50):
