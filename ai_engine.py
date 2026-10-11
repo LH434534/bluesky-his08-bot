@@ -197,10 +197,13 @@ class AIEngine:
             except ImportError as e:
                 raise RuntimeError("g4f não instalado (pip install -U g4f)") from e
             try:
+                import types as _types
                 _prov = getattr(g4f, "Provider", None)
                 for _n in dir(_prov):
                     _p = getattr(_prov, _n, None)
-                    if isinstance(_p, type) and not _n.startswith("_") and not hasattr(_p, "working"):
+                    if _n.startswith("_") or _p is None:
+                        continue
+                    if isinstance(_p, (_types.ModuleType, type)) and not hasattr(_p, "working"):
                         try: _p.working = True
                         except Exception: pass
             except Exception:
