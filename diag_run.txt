@@ -1,0 +1,2 @@
+[falha] login: HTTP 401: {"error":"AuthenticationRequired","message":"Invalid identifier or password"}
+EXIT_CODE=1
