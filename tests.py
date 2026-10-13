@@ -440,9 +440,18 @@ class TestAntiBanExtremo(unittest.TestCase):
         self.assertEqual(ba._rate_headers(None), {})
 
     def test_403_marca_blocked_e_auth_error(self):
+        import io
+        import urllib.error
         import bluesky_agent as ba
         c = ba.BskyClient({"handle": "h", "app_password": "p"})
-        self.assertFalse(c.blocked)
+        error = urllib.error.HTTPError(
+            "https://bsky.social/xrpc/test", 403, "Forbidden", {},
+            io.BytesIO(b'{"error":"Blocked"}'),
+        )
+        with mock.patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 403"):
+                c._req("/test")
+        self.assertTrue(c.blocked)
         self.assertFalse(c.auth_error)
 
     def test_modo_protecao_bloqueia_escrita(self):
