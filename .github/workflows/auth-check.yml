@@ -1,0 +1,62 @@
+name: auth-check
+
+# Não posta nada. Só responde: a credencial salva ainda funciona?
+# Rode antes de culpar o código — a maioria das falhas do bot é App Password revogada.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: instalar requests
+        run: pip install requests
+
+      - name: checar credencial
+        id: auth
+        env:
+          BSKY_HANDLE:       ${{ secrets.BSKY_HANDLE }}
+          BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
+          BSKY_PDS:          https://bsky.social
+        run: |
+          set +e
+          python scripts/check_auth.py
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+
+      # Cada diagnóstico é um passo com nome próprio: assim o resultado fica
+      # legível pela API de jobs, sem depender de baixar logs.
+      - name: "DIAGNOSTICO: credencial VALIDA (exit 0)"
+        if: steps.auth.outputs.exit_code == '0'
+        run: echo "credencial ok"
+
+      - name: "DIAGNOSTICO: SECRET AUSENTE (exit 2)"
+        if: steps.auth.outputs.exit_code == '2'
+        run: exit 1
+
+      - name: "DIAGNOSTICO: APP PASSWORD INVALIDA (exit 3)"
+        if: steps.auth.outputs.exit_code == '3'
+        run: exit 1
+
+      - name: "DIAGNOSTICO: HANDLE INEXISTENTE (exit 4)"
+        if: steps.auth.outputs.exit_code == '4'
+        run: exit 1
+
+      - name: "DIAGNOSTICO: SEM REDE ATE O PDS (exit 5)"
+        if: steps.auth.outputs.exit_code == '5'
+        run: exit 1
+
+      - name: "DIAGNOSTICO: CODIGO INESPERADO"
+        if: ${{ !contains(fromJSON('["0","2","3","4","5"]'), steps.auth.outputs.exit_code) }}
+        run: |
+          echo "codigo=${{ steps.auth.outputs.exit_code }}"
+          exit 1
